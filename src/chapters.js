@@ -7,22 +7,35 @@ import { buildSections } from './align.js'
 const BLOCK_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, blockquote, li'
 const HEADING_RE = /^h[1-6]$/i
 
-// Read one spine item as [{ text, heading }] in document order. Whether a block
-// is a heading comes from its tag, never from its wording, so this works for
-// any language and any chapter-numbering scheme.
-function readBlocks(root) {
-  const body = (root.querySelector && root.querySelector('body')) || root
+// Collapse whitespace the same way everywhere text is compared or located.
+export function normalizeText(s) {
+  return (s || '').replace(/\s+/g, ' ').trim()
+}
+
+// The text blocks of one chapter file, in document order: [{ el, text }].
+// A block's position in this list is its identity: the same function runs on
+// the copy read for alignment and on the copy rendered on screen, so the Nth
+// block of one is the Nth block of the other.
+export function leafBlocks(doc) {
+  const body = (doc.querySelector && doc.querySelector('body')) || doc
   const out = []
   for (const el of body.querySelectorAll(BLOCK_SELECTOR)) {
     if (el.querySelector(BLOCK_SELECTOR)) continue
-    const text = (el.textContent || '').replace(/\s+/g, ' ').trim()
-    if (text) out.push({ text, heading: HEADING_RE.test(el.localName || el.tagName) })
+    const text = normalizeText(el.textContent)
+    if (text) out.push({ el, text })
   }
   return out
 }
 
+// Identifies a block across both copies: chapter file (spine index) + ordinal.
+export function blockKey(spine, ord) {
+  return `${spine}:${ord}`
+}
+
 // Read an epub's text and split it into sections (see buildSections in
-// align.js). The book is closed again before returning.
+// align.js). Each body line carries `ref: { spine, ord }` locating it on
+// screen. Whether a block is a heading comes from its tag, never its wording.
+// The book is closed again before returning.
 export async function loadSections(url) {
   const book = ePub(url, { openAs: 'epub' })
   try {
@@ -31,7 +44,13 @@ export async function loadSections(url) {
     for (const item of book.spine.spineItems) {
       if (item.linear === false || item.linear === 'no') continue
       const root = await item.load(book.load.bind(book))
-      blocks.push(...readBlocks(root))
+      leafBlocks(root).forEach(({ el, text }, ord) => {
+        blocks.push({
+          text,
+          heading: HEADING_RE.test(el.localName || el.tagName),
+          ref: { spine: item.index, ord },
+        })
+      })
       item.unload()
     }
     return buildSections(blocks)

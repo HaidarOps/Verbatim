@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node src/align.test.mjs"
+    "test": "node src/align.test.mjs && node server/rateTranslation.test.mjs"
   },
   "dependencies": {
     "epubjs": "^0.3.93",

@@ -13,6 +13,9 @@ import {
   firstMatchedPairs,
   buildSections,
   alignSections,
+  sentenceSpans,
+  alignLines,
+  counterpartSentences,
 } from './align.js'
 
 let failures = 0
@@ -240,6 +243,25 @@ console.log('\n# section alignment survives one-sided front and back matter')
   const pairs = alignSections(src, tgt, { strip: false })
   const wrong = pairs.filter((p) => p.title.replace('src-', '') !== p.targetTitle.replace('tgt-', ''))
   check('every chapter pairs with its counterpart', wrong.length === 0 && pairs.length === 20, `${pairs.length} pairs, wrong: ${JSON.stringify(wrong.map((p) => [p.title, p.targetTitle]))}`)
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# sentence positions and cross-side lookup (used for highlighting)')
+{
+  const line = 'Mr. Fogg lived at No. 7, Saville Row. He was rich.'
+  const spans = sentenceSpans(line)
+  check('spans point at the exact sentence text', spans.map((s) => line.slice(s.start, s.end)).join('|') === 'Mr. Fogg lived at No. 7, Saville Row.|He was rich.', JSON.stringify(spans))
+
+  // Two paragraphs each side; the target merges source sentences 2+3 into one.
+  const L = (text) => ({ text })
+  const srcLines = [L('The first sentence here. A second one follows.'), L('Third is short. Fourth closes it.')]
+  const tgtLines = [L('La première phrase ici. Une deuxième suit.'), L('La troisième est courte et la quatrième la clôt.')]
+  const al = alignLines(srcLines, tgtLines)
+  check('every sentence remembers its paragraph', al.src.map((s) => s.line).join() === '0,0,1,1' && al.tgt.map((s) => s.line).join() === '0,0,1', JSON.stringify([al.src, al.tgt]))
+  const fromSrc = counterpartSentences(al, 'src', [2])
+  check('selecting one half of a 2-1 bead returns the whole bead', fromSrc.own.join() === '2,3' && fromSrc.other.join() === '2', JSON.stringify(fromSrc))
+  const fromTgt = counterpartSentences(al, 'tgt', [0])
+  check('lookup works from the translation side too', fromTgt.own.join() === '0' && fromTgt.other.join() === '0', JSON.stringify(fromTgt))
 }
 
 // ---------------------------------------------------------------------------

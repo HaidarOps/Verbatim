@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import ePub from 'epubjs'
 import { loadSections } from './chapters.js'
 import { alignSections, alignTexts, firstMatchedPairs } from './align.js'
+import { createCrossHighlighter, createLinker } from './parallel.js'
+import RatingPopup from './RatingPopup.jsx'
 
 // Pre-select the first matched section with real body text on both sides, so
 // the panel opens on the first chapter rather than a title page.
@@ -16,8 +18,13 @@ function defaultSection(pairs) {
 
 // Renders one epub into its own scroll box. When `watchResize` is set, it
 // reflows as the box width changes (used by the single-book zoom view).
-function EpubPane({ url, className, watchResize }) {
+// `onRendition` receives the epubjs rendition once created (null on teardown).
+function EpubPane({ url, className, watchResize, onRendition }) {
   const ref = useRef(null)
+  const onRenditionRef = useRef(onRendition)
+  useEffect(() => {
+    onRenditionRef.current = onRendition
+  }, [onRendition])
 
   useEffect(() => {
     if (!ref.current) return
@@ -30,6 +37,7 @@ function EpubPane({ url, className, watchResize }) {
       flow: 'scrolled-doc',
       manager: 'continuous',
     })
+    onRenditionRef.current?.(rendition)
     rendition.display()
 
     let observer = null
@@ -51,6 +59,7 @@ function EpubPane({ url, className, watchResize }) {
     return () => {
       observer?.disconnect()
       if (rafId) cancelAnimationFrame(rafId)
+      onRenditionRef.current?.(null)
       rendition.destroy()
       epub.destroy()
     }
@@ -64,12 +73,12 @@ function EpubPane({ url, className, watchResize }) {
 // inside the selected pair of sections. The first 3 matched sentence pairs are
 // highlighted in matching colours so the pairing can be verified by eye.
 // Nothing here reads chapter titles or numbers, so any language works.
-function AlignmentPanel({ originalUrl, translationUrl, onClose }) {
-  const [sections, setSections] = useState(null) // matched section pairs
-  const [selected, setSelected] = useState(0)
-  const [loadError, setLoadError] = useState('')
+// Read both books and align their sections. Returns { sections, error };
+// `sections` is null until ready.
+function useParallelBooks(originalUrl, translationUrl) {
+  const [state, setState] = useState({ key: null, sections: null, error: '' })
+  const key = `${originalUrl}|${translationUrl}`
 
-  // Read both books and align their sections once.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -80,20 +89,26 @@ function AlignmentPanel({ originalUrl, translationUrl, onClose }) {
         ])
         if (cancelled) return
         const matched = alignSections(orig, trans)
-        if (matched.length === 0) {
-          setLoadError('Could not match any sections between the two books.')
-          return
-        }
-        setSections(matched)
-        setSelected(defaultSection(matched))
+        setState(
+          matched.length === 0
+            ? { key, sections: null, error: 'Could not match any sections between the two books.' }
+            : { key, sections: matched, error: '' },
+        )
       } catch (err) {
-        if (!cancelled) setLoadError(String(err?.message || err))
+        if (!cancelled) setState({ key, sections: null, error: String(err?.message || err) })
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [originalUrl, translationUrl])
+  }, [key, originalUrl, translationUrl])
+
+  // Ignore results that belong to a previous pair of books.
+  return state.key === key ? state : { sections: null, error: '' }
+}
+
+function AlignmentPanel({ sections, loadError, onClose }) {
+  const [selected, setSelected] = useState(() => (sections ? defaultSection(sections) : 0))
 
   // Sentence-align the selected pair of sections (fast: capped at 200 each).
   const pairs = useMemo(() => {
@@ -164,20 +179,62 @@ function Pair({ index, pair }) {
   )
 }
 
+// Side-by-side reader. Selecting text in either book highlights it (amber)
+// and highlights the aligned passage in the other book (blue), scrolling the
+// other book to it. See parallel.js.
 function CompareReader({ book }) {
   const [showAlign, setShowAlign] = useState(false)
+  const [status, setStatus] = useState('')
+  const [linked, setLinked] = useState(null) // { id, original, translation, anchor }
+  const { sections, error } = useParallelBooks(book.url, book.translationUrl)
+
+  const [highlighter] = useState(() =>
+    createCrossHighlighter({
+      onStatus: setStatus,
+      onLink: (match) => setLinked(match && { ...match, id: Date.now() }),
+    }),
+  )
+  const closePopup = useCallback(() => setLinked(null), [])
+  useEffect(() => {
+    highlighter.setLinker(sections ? createLinker(sections) : null)
+  }, [highlighter, sections])
+
+  // Status messages fade after a few seconds.
+  useEffect(() => {
+    if (!status) return
+    const t = setTimeout(() => setStatus(''), 3000)
+    return () => clearTimeout(t)
+  }, [status])
+
+  const attachSource = useCallback((r) => highlighter.attach('src', r), [highlighter])
+  const attachTarget = useCallback((r) => highlighter.attach('tgt', r), [highlighter])
+
+  let note = status
+  if (!note && !sections && !error) note = 'Linking the two books…'
+  if (!note && error) note = error
 
   return (
     <div className="reader-compare">
       <button className="align-button" onClick={() => setShowAlign(true)}>
         Align
       </button>
-      <EpubPane className="epub-pane" url={book.url} />
-      <EpubPane className="epub-pane" url={book.translationUrl} />
+      {note && <div className="compare-status">{note}</div>}
+      <EpubPane className="epub-pane" url={book.url} onRendition={attachSource} />
+      <EpubPane className="epub-pane" url={book.translationUrl} onRendition={attachTarget} />
+      {linked && (
+        <RatingPopup
+          key={linked.id}
+          original={linked.original}
+          translation={linked.translation}
+          anchor={linked.anchor}
+          onClose={closePopup}
+        />
+      )}
       {showAlign && (
         <AlignmentPanel
-          originalUrl={book.url}
-          translationUrl={book.translationUrl}
+          key={sections ? 'ready' : 'loading'}
+          sections={sections}
+          loadError={error}
           onClose={() => setShowAlign(false)}
         />
       )}

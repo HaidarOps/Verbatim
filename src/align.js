@@ -46,22 +46,32 @@ export function splitSentences(text) {
   const paragraphs = text.replace(/\r/g, '').split(/\n+/)
   for (const para of paragraphs) {
     const trimmed = para.replace(/\s+/g, ' ').trim()
-    if (!trimmed) continue
-    const parts = trimmed.match(SENTENCE_RE) || [trimmed]
-    const merged = []
-    for (const part of parts) {
-      const s = part.trim()
-      if (!s) continue
-      const prev = merged[merged.length - 1]
-      if (prev !== undefined && isFalseBreak(prev, s)) {
-        merged[merged.length - 1] = /^[,;:]/.test(s) ? prev + s : `${prev} ${s}`
-      } else {
-        merged.push(s)
-      }
+    for (const { start, end } of sentenceSpans(trimmed)) {
+      sentences.push(trimmed.slice(start, end))
     }
-    sentences.push(...merged)
   }
   return sentences
+}
+
+// Sentence boundaries within one paragraph, as [{ start, end }] character
+// offsets into `line`, so a sentence can be found again in the rendered page.
+export function sentenceSpans(line) {
+  const spans = []
+  for (const m of line.matchAll(SENTENCE_RE)) {
+    const raw = m[0]
+    if (!raw) continue
+    const lead = raw.length - raw.trimStart().length
+    const start = m.index + lead
+    const end = m.index + raw.trimEnd().length
+    if (end <= start) continue
+    const prev = spans[spans.length - 1]
+    if (prev && isFalseBreak(line.slice(prev.start, prev.end), line.slice(start, end))) {
+      prev.end = end
+    } else {
+      spans.push({ start, end })
+    }
+  }
+  return spans
 }
 
 // A full stop that did not really end a sentence: the next piece starts with
@@ -253,43 +263,49 @@ export function alignTexts(sourceText, targetText, options = {}) {
 const SECTION_REL = 0.1
 const SECTION_SKIP_PENALTY = 200
 
-// `blocks` is the book in reading order: [{ text, heading: boolean }].
+// `blocks` is the book in reading order: [{ text, heading: boolean, ref? }],
+// where `ref` is an opaque handle locating the block in the rendered book; it
+// is carried through to each body line so alignments can be shown on screen.
 // A section is a run of consecutive headings plus the body text after it, so
 // stacked headings ("II" + "WHAT BECAME OF CANDIDE…", or "OEUVRES / DE /
 // VOLTAIRE") collapse into one section title.
 export function buildSections(blocks) {
   const sections = []
   let cur = null
-  for (const { text, heading } of blocks) {
+  for (const { text, heading, ref } of blocks) {
     if (!text) continue
     if (heading) {
-      if (!cur || cur.body.length > 0) {
-        cur = { titles: [], body: [] }
+      if (!cur || cur.lines.length > 0) {
+        cur = { titles: [], lines: [] }
         sections.push(cur)
       }
       cur.titles.push(text)
     } else {
       if (!cur) {
-        cur = { titles: [], body: [] }
+        cur = { titles: [], lines: [] }
         sections.push(cur)
       }
-      cur.body.push(text)
+      cur.lines.push({ text, ref })
     }
   }
-  return sections.map((s) => {
-    const text = s.body.join('\n')
-    return {
+  return sections.map((s) =>
+    makeSection(
       // The last headings in a run belong to this section; earlier ones may be
       // a whole contents page marked up as headings.
-      title: s.titles.slice(-2).join(' · ') || s.body[0]?.slice(0, 60) || '',
-      text,
-      length: sentenceLength(text),
-    }
-  })
+      s.titles.slice(-2).join(' · ') || s.lines[0]?.text.slice(0, 60) || '',
+      s.lines,
+    ),
+  )
+}
+
+function makeSection(title, lines) {
+  const text = lines.map((l) => l.text).join('\n')
+  return { title, lines, text, length: sentenceLength(text) }
 }
 
 // Align two section lists. Returns matched pairs (both sides non-empty), each
-// { title, sourceText, targetText }, in reading order. Unmatched sections —
+// { title, targetTitle, sourceText, targetText, sourceLines, targetLines }, in
+// reading order. Unmatched sections —
 // front matter, an introduction only one edition has, license text — fall out
 // as 1-0 / 0-1 beads.
 export function alignSections(srcSections, tgtSections, options = {}) {
@@ -330,35 +346,66 @@ export function alignSections(srcSections, tgtSections, options = {}) {
         targetTitle: t.map((x) => x.title).join(' · '),
         sourceText: s.map((x) => x.text).join('\n'),
         targetText: t.map((x) => x.text).join('\n'),
+        sourceLines: s.flatMap((x) => x.lines),
+        targetLines: t.flatMap((x) => x.lines),
       }
     })
+}
+
+// Sentence-align one matched section pair in full, keeping where each
+// sentence sits: { src, tgt, beads }, where src/tgt are
+// [{ line, start, end }] (line index into the pair's lines, character offsets
+// into that line) and beads are as returned by alignLengths.
+export function alignLines(srcLines, tgtLines) {
+  const locate = (lines) =>
+    lines.flatMap((l, line) => sentenceSpans(l.text).map(({ start, end }) => ({ line, start, end })))
+  const src = locate(srcLines)
+  const tgt = locate(tgtLines)
+  const len = (lines) => (s) => sentenceLength(lines[s.line].text.slice(s.start, s.end))
+  const { beads } = alignLengths(src.map(len(srcLines)), tgt.map(len(tgtLines)))
+  return { src, tgt, beads }
+}
+
+// Given sentence indices hit on one side ('src' or 'tgt'), return the full
+// sets of sentence indices on both sides covered by the beads containing them.
+export function counterpartSentences(alignment, side, hits) {
+  const hitSet = new Set(hits)
+  const own = new Set()
+  const other = new Set()
+  for (const b of alignment.beads) {
+    const [ownStart, ownCount, otherStart, otherCount] =
+      side === 'src' ? [b.s, b.sn, b.t, b.tn] : [b.t, b.tn, b.s, b.sn]
+    let touched = false
+    for (let k = ownStart; k < ownStart + ownCount; k++) if (hitSet.has(k)) touched = true
+    if (!touched) continue
+    for (let k = ownStart; k < ownStart + ownCount; k++) own.add(k)
+    for (let k = otherStart; k < otherStart + otherCount; k++) other.add(k)
+  }
+  return { own: [...own].sort((a, b) => a - b), other: [...other].sort((a, b) => a - b) }
 }
 
 // Drop sections that belong to the Project Gutenberg header/footer, using the
 // same markers as stripBoilerplate(). Books without the markers are untouched.
 // The section holding a marker is trimmed rather than dropped, in case real
-// text shares it.
+// text shares it. Trimming is by whole paragraph (the marker's paragraph goes
+// too) so every remaining line still points at its paragraph on screen.
 function dropBoilerplateSections(sections) {
-  const startRe = /\*\*\*\s*START OF (?:THE|THIS) PROJECT GUTENBERG[^*]*\*\*\*/i
+  const startRe = /\*\*\*\s*START OF (?:THE|THIS) PROJECT GUTENBERG/i
   const endRe = /\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG/i
   let out = sections
   const first = out.findIndex((s) => startRe.test(s.text))
   if (first !== -1) {
     const s = out[first]
-    const m = s.text.match(startRe)
-    out = [withText(s, s.text.slice(m.index + m[0].length)), ...out.slice(first + 1)]
+    const at = s.lines.findIndex((l) => startRe.test(l.text))
+    out = [makeSection(s.title, s.lines.slice(at + 1)), ...out.slice(first + 1)]
   }
   const last = out.findIndex((s) => endRe.test(s.text))
   if (last !== -1) {
     const s = out[last]
-    out = [...out.slice(0, last), withText(s, s.text.slice(0, s.text.search(endRe)))]
+    const at = s.lines.findIndex((l) => endRe.test(l.text))
+    out = [...out.slice(0, last), makeSection(s.title, s.lines.slice(0, at))]
   }
   return out.filter((s) => s.length > 0)
-}
-
-function withText(section, text) {
-  const t = text.trim()
-  return { ...section, text: t, length: sentenceLength(t) }
 }
 
 // The first `count` beads that have text on *both* sides — i.e. real matched
