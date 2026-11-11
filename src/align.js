@@ -48,12 +48,31 @@ export function splitSentences(text) {
     const trimmed = para.replace(/\s+/g, ' ').trim()
     if (!trimmed) continue
     const parts = trimmed.match(SENTENCE_RE) || [trimmed]
+    const merged = []
     for (const part of parts) {
       const s = part.trim()
-      if (s) sentences.push(s)
+      if (!s) continue
+      const prev = merged[merged.length - 1]
+      if (prev !== undefined && isFalseBreak(prev, s)) {
+        merged[merged.length - 1] = /^[,;:]/.test(s) ? prev + s : `${prev} ${s}`
+      } else {
+        merged.push(s)
+      }
     }
+    sentences.push(...merged)
   }
   return sentences
+}
+
+// A full stop that did not really end a sentence: the next piece starts with
+// a lowercase letter, digit or comma ("No. 7", "esq., the…"), or the previous
+// piece ends in a short capitalised abbreviation ("Mr.", "Dr.", "St.", "M.").
+// Uses letter case only, so it holds for any cased script. Kept to at most one
+// lowercase letter so real words ("Row.", "Rome.") still end sentences.
+const CONTINUATION_RE = /^[\p{Ll}\p{N},;:]/u
+const ABBREVIATION_RE = /(?:^|[\s(“"'‘«])\p{Lu}\p{Ll}?\.$/u
+function isFalseBreak(prev, next) {
+  return CONTINUATION_RE.test(next) || ABBREVIATION_RE.test(prev)
 }
 
 // Unicode-aware length (code points), so a Cyrillic or CJK character counts as
@@ -91,11 +110,17 @@ const BIG = 1e6
 // Cost of a length pairing, in the same -100·log(prob) units as the bead
 // priors below. `c` is the expected target chars per source char (estimated
 // from the two texts) and `s2` the per-character variance (Gale–Church use 6.8).
-function lengthCost(l1, l2, c, s2) {
+//
+// `rel` adds a variance term proportional to the squared length (a relative
+// error). It is 0 for sentences, as in the paper; whole sections need it
+// because two translations of a 20,000-char chapter routinely differ by ~10%,
+// which the per-character model alone would treat as impossibly unlikely.
+function lengthCost(l1, l2, c, s2, rel = 0) {
   if (l1 === 0 && l2 === 0) return 0
   const mean = (l1 + l2 / c) / 2
   if (mean <= 0) return BIG
-  const z = Math.abs((c * l1 - l2) / Math.sqrt(s2 * mean))
+  const variance = s2 * mean + (rel * c * mean) ** 2
+  const z = Math.abs((c * l1 - l2) / Math.sqrt(variance))
   const pd = 2 * (1 - normCdf(z))
   if (pd <= 0) return BIG
   return -100 * Math.log(pd)
@@ -121,6 +146,13 @@ export function alignLengths(sourceLens, targetLens, options = {}) {
   const sumTgt = targetLens.reduce((a, b) => a + b, 0)
   const c = options.c || (sumSrc > 0 ? Math.max(0.01, sumTgt / sumSrc) : 1)
   const s2 = options.s2 || 6.8
+  const rel = options.rel || 0
+  const beadTypes = options.beads || BEADS
+  // In the paper a 1-0 / 0-1 bead also pays a length cost (as if matched to an
+  // empty string). That is modest for a sentence but astronomically large for
+  // a whole section, which would make skipping one effectively impossible.
+  // `flatSkips` charges skip beads only their prior penalty.
+  const flatSkips = !!options.flatSkips
 
   // Prefix sums for O(1) multi-sentence bead lengths.
   const psSrc = new Float64Array(n + 1)
@@ -136,13 +168,15 @@ export function alignLengths(sourceLens, targetLens, options = {}) {
     for (let j = 0; j <= m; j++) {
       const base = D[i][j]
       if (base === Infinity) continue
-      for (const [sn, tn, penalty] of BEADS) {
+      for (const [sn, tn, penalty] of beadTypes) {
         const ni = i + sn
         const nj = j + tn
         if (ni > n || nj > m) continue
         const l1 = psSrc[ni] - psSrc[i]
         const l2 = psTgt[nj] - psTgt[j]
-        const cost = base + penalty + lengthCost(l1, l2, c, s2)
+        const skipBead = sn === 0 || tn === 0
+        const cost =
+          base + penalty + (flatSkips && skipBead ? 0 : lengthCost(l1, l2, c, s2, rel))
         if (cost < D[ni][nj]) {
           D[ni][nj] = cost
           back[ni][nj] = [i, j, sn, tn]
@@ -200,6 +234,131 @@ export function alignTexts(sourceText, targetText, options = {}) {
   }))
 
   return { source: srcSentences, target: tgtSentences, beads: mapped, c }
+}
+
+// ---------------------------------------------------------------------------
+// Section level (the paper's first pass)
+// ---------------------------------------------------------------------------
+//
+// Gale & Church align paragraphs first and then sentences *within* aligned
+// paragraphs. A whole book is too big for a sentence-level DP, so we do the
+// same at a coarser grain: split each book into sections at its heading
+// elements, align the sections by length, then sentence-align inside a pair.
+// Section boundaries come from document structure (heading tags) only — the
+// heading *words* are never interpreted, so any language or numbering works.
+
+// Section-level tuning (see alignSections). A one-sided section (an intro or
+// endnotes only one edition has) is far more common than a one-sided sentence,
+// so skipping one is cheaper than the paper's sentence-level 450.
+const SECTION_REL = 0.1
+const SECTION_SKIP_PENALTY = 200
+
+// `blocks` is the book in reading order: [{ text, heading: boolean }].
+// A section is a run of consecutive headings plus the body text after it, so
+// stacked headings ("II" + "WHAT BECAME OF CANDIDE…", or "OEUVRES / DE /
+// VOLTAIRE") collapse into one section title.
+export function buildSections(blocks) {
+  const sections = []
+  let cur = null
+  for (const { text, heading } of blocks) {
+    if (!text) continue
+    if (heading) {
+      if (!cur || cur.body.length > 0) {
+        cur = { titles: [], body: [] }
+        sections.push(cur)
+      }
+      cur.titles.push(text)
+    } else {
+      if (!cur) {
+        cur = { titles: [], body: [] }
+        sections.push(cur)
+      }
+      cur.body.push(text)
+    }
+  }
+  return sections.map((s) => {
+    const text = s.body.join('\n')
+    return {
+      // The last headings in a run belong to this section; earlier ones may be
+      // a whole contents page marked up as headings.
+      title: s.titles.slice(-2).join(' · ') || s.body[0]?.slice(0, 60) || '',
+      text,
+      length: sentenceLength(text),
+    }
+  })
+}
+
+// Align two section lists. Returns matched pairs (both sides non-empty), each
+// { title, sourceText, targetText }, in reading order. Unmatched sections —
+// front matter, an introduction only one edition has, license text — fall out
+// as 1-0 / 0-1 beads.
+export function alignSections(srcSections, tgtSections, options = {}) {
+  const src = options.strip === false ? srcSections : dropBoilerplateSections(srcSections)
+  const tgt = options.strip === false ? tgtSections : dropBoilerplateSections(tgtSections)
+  const srcLens = src.map((s) => s.length)
+  const tgtLens = tgt.map((s) => s.length)
+  const skip = options.skip ?? SECTION_SKIP_PENALTY
+  const opts = {
+    rel: options.rel ?? SECTION_REL,
+    flatSkips: true,
+    beads: BEADS.map(([sn, tn, p]) => [sn, tn, sn === 0 || tn === 0 ? skip : p]),
+  }
+
+  // The length ratio `c` from whole-book totals is skewed by material only one
+  // edition has (a long introduction, endnotes). Re-estimate it from the
+  // sections that actually paired up and align again.
+  let { beads } = alignLengths(srcLens, tgtLens, opts)
+  for (let pass = 0; pass < (options.passes ?? 2); pass++) {
+    let a = 0
+    let b = 0
+    for (const bd of beads) {
+      if (bd.sn === 0 || bd.tn === 0) continue
+      for (let k = 0; k < bd.sn; k++) a += srcLens[bd.s + k]
+      for (let k = 0; k < bd.tn; k++) b += tgtLens[bd.t + k]
+    }
+    if (a === 0 || b === 0) break
+    beads = alignLengths(srcLens, tgtLens, { ...opts, c: b / a }).beads
+  }
+
+  return beads
+    .filter((b) => b.sn > 0 && b.tn > 0)
+    .map((b) => {
+      const s = src.slice(b.s, b.s + b.sn)
+      const t = tgt.slice(b.t, b.t + b.tn)
+      return {
+        title: s.map((x) => x.title).join(' · '),
+        targetTitle: t.map((x) => x.title).join(' · '),
+        sourceText: s.map((x) => x.text).join('\n'),
+        targetText: t.map((x) => x.text).join('\n'),
+      }
+    })
+}
+
+// Drop sections that belong to the Project Gutenberg header/footer, using the
+// same markers as stripBoilerplate(). Books without the markers are untouched.
+// The section holding a marker is trimmed rather than dropped, in case real
+// text shares it.
+function dropBoilerplateSections(sections) {
+  const startRe = /\*\*\*\s*START OF (?:THE|THIS) PROJECT GUTENBERG[^*]*\*\*\*/i
+  const endRe = /\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG/i
+  let out = sections
+  const first = out.findIndex((s) => startRe.test(s.text))
+  if (first !== -1) {
+    const s = out[first]
+    const m = s.text.match(startRe)
+    out = [withText(s, s.text.slice(m.index + m[0].length)), ...out.slice(first + 1)]
+  }
+  const last = out.findIndex((s) => endRe.test(s.text))
+  if (last !== -1) {
+    const s = out[last]
+    out = [...out.slice(0, last), withText(s, s.text.slice(0, s.text.search(endRe)))]
+  }
+  return out.filter((s) => s.length > 0)
+}
+
+function withText(section, text) {
+  const t = text.trim()
+  return { ...section, text: t, length: sentenceLength(t) }
 }
 
 // The first `count` beads that have text on *both* sides — i.e. real matched

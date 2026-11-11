@@ -1,11 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import ePub from 'epubjs'
-import { openAlignBook, extractChapterText } from './chapters.js'
-import { alignTexts, firstMatchedPairs } from './align.js'
+import { loadSections } from './chapters.js'
+import { alignSections, alignTexts, firstMatchedPairs } from './align.js'
 
-// Chapter to select by default: III. "The Second Marriage and the Second Family".
-const DEFAULT_CHAPTER = 2
+// Pre-select the first matched section with real body text on both sides, so
+// the panel opens on the first chapter rather than a title page.
+const MIN_DEFAULT_LENGTH = 2000
+function defaultSection(pairs) {
+  const i = pairs.findIndex(
+    (p) => p.sourceText.length >= MIN_DEFAULT_LENGTH && p.targetText.length >= MIN_DEFAULT_LENGTH,
+  )
+  return i === -1 ? 0 : i
+}
 
 // Renders one epub into its own scroll box. When `watchResize` is set, it
 // reflows as the box width changes (used by the single-book zoom view).
@@ -52,90 +59,55 @@ function EpubPane({ url, className, watchResize }) {
   return <div className={className} ref={ref} />
 }
 
-// Opens both books, lists their chapters, and for the selected chapter aligns
-// the two editions and shows the first 3 matched segments highlighted in
-// matching colours so the pairing can be verified by eye. Chapters are matched
-// by ordinal, so the Nth chapter of the original lines up with the Nth of the
-// translation even when their front matter differs.
+// Opens both books and aligns them in two Gale–Church passes: first the
+// books' sections (split at heading elements) by length, then the sentences
+// inside the selected pair of sections. The first 3 matched sentence pairs are
+// highlighted in matching colours so the pairing can be verified by eye.
+// Nothing here reads chapter titles or numbers, so any language works.
 function AlignmentPanel({ originalUrl, translationUrl, onClose }) {
-  const [ready, setReady] = useState(false)
-  const [chapters, setChapters] = useState([])
-  const [selected, setSelected] = useState(DEFAULT_CHAPTER)
-  const [phase, setPhase] = useState('loading') // loading | aligning | done | error
-  const [pairs, setPairs] = useState([])
-  const [message, setMessage] = useState('')
-  const booksRef = useRef(null)
+  const [sections, setSections] = useState(null) // matched section pairs
+  const [selected, setSelected] = useState(0)
+  const [loadError, setLoadError] = useState('')
 
-  // Open both books and read their chapter lists once.
+  // Read both books and align their sections once.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         const [orig, trans] = await Promise.all([
-          openAlignBook(originalUrl),
-          openAlignBook(translationUrl),
+          loadSections(originalUrl),
+          loadSections(translationUrl),
         ])
-        if (cancelled) {
-          orig.book.destroy()
-          trans.book.destroy()
+        if (cancelled) return
+        const matched = alignSections(orig, trans)
+        if (matched.length === 0) {
+          setLoadError('Could not match any sections between the two books.')
           return
         }
-        booksRef.current = { orig, trans }
-        setChapters(orig.chapters.map((c) => c.label))
-        setSelected(Math.min(DEFAULT_CHAPTER, Math.max(0, orig.chapters.length - 1)))
-        setReady(true)
+        setSections(matched)
+        setSelected(defaultSection(matched))
       } catch (err) {
-        if (!cancelled) {
-          setMessage(String(err?.message || err))
-          setPhase('error')
-        }
+        if (!cancelled) setLoadError(String(err?.message || err))
       }
     })()
     return () => {
       cancelled = true
-      const b = booksRef.current
-      if (b) {
-        b.orig.book.destroy()
-        b.trans.book.destroy()
-      }
     }
   }, [originalUrl, translationUrl])
 
-  // Align the selected chapter.
-  useEffect(() => {
-    if (!ready) return
-    const b = booksRef.current
-    if (!b) return
-    let cancelled = false
-    setPhase('aligning')
-    ;(async () => {
-      try {
-        const [srcText, tgtText] = await Promise.all([
-          extractChapterText(b.orig.book, b.orig.chapters, selected),
-          extractChapterText(b.trans.book, b.trans.chapters, selected),
-        ])
-        if (cancelled) return
-        const result = alignTexts(srcText, tgtText, { limit: 200 })
-        const matched = firstMatchedPairs(result, 3)
-        if (cancelled) return
-        if (matched.length === 0) {
-          setMessage('No matching sentences found in this chapter.')
-          setPhase('error')
-        } else {
-          setPairs(matched)
-          setPhase('done')
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setMessage(String(err?.message || err))
-          setPhase('error')
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [ready, selected])
+  // Sentence-align the selected pair of sections (fast: capped at 200 each).
+  const pairs = useMemo(() => {
+    const section = sections?.[selected]
+    if (!section) return []
+    const result = alignTexts(section.sourceText, section.targetText, { limit: 200 })
+    return firstMatchedPairs(result, 3)
+  }, [sections, selected])
+
+  const ready = sections !== null
+  let message = loadError
+  if (!message && ready && pairs.length === 0) {
+    message = 'No matching sentences found in this section.'
+  }
 
   return (
     <div className="align-backdrop" onClick={onClose}>
@@ -147,24 +119,23 @@ function AlignmentPanel({ originalUrl, translationUrl, onClose }) {
               value={selected}
               onChange={(e) => setSelected(Number(e.target.value))}
             >
-              {chapters.map((title, i) => (
+              {sections.map((s, i) => (
                 <option key={i} value={i}>
-                  {title}
+                  {s.title}
                 </option>
               ))}
             </select>
           ) : (
-            <span>Loading chapters…</span>
+            !loadError && <span>Aligning books…</span>
           )}
           <button className="align-close" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
 
-        {phase === 'aligning' && <p className="align-msg">Aligning…</p>}
-        {phase === 'error' && <p className="align-msg">{message}</p>}
+        {message && <p className="align-msg">{message}</p>}
 
-        {phase === 'done' && (
+        {pairs.length > 0 && (
           <div className="align-grid">
             <div className="align-colhead">Original</div>
             <div className="align-colhead">Translation</div>

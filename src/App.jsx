@@ -4,8 +4,31 @@ import Home from './Home.jsx'
 import Reader from './Reader.jsx'
 import ZoomHandles from './ZoomHandles.jsx'
 
+// Books bundled in public/books, always available on the main menu.
+const BASE = import.meta.env.BASE_URL
+const BUNDLED_BOOKS = [
+  {
+    id: 'candide',
+    name: 'Candide (English / French)',
+    url: `${BASE}books/candide_en.epub`,
+    translationUrl: `${BASE}books/candide_fr.epub`,
+  },
+  {
+    id: 'around-the-world',
+    name: 'Around the World in Eighty Days (French / English)',
+    url: `${BASE}books/around_the_world_fr.epub`,
+    translationUrl: `${BASE}books/around_the_world_en.epub`,
+  },
+  {
+    id: 'karamazov',
+    name: 'The Brothers Karamazov (English / German)',
+    url: `${BASE}books/karamazov_en.epub`,
+    translationUrl: `${BASE}books/karamazov_de.epub`,
+  },
+]
+
 function App() {
-  const [books, setBooks] = useState([])
+  const [books, setBooks] = useState(BUNDLED_BOOKS)
 
   function addBook(file) {
     const book = {

@@ -11,6 +11,8 @@ import {
   alignLengths,
   alignTexts,
   firstMatchedPairs,
+  buildSections,
+  alignSections,
 } from './align.js'
 
 let failures = 0
@@ -188,6 +190,56 @@ console.log('\n# end-to-end alignTexts with realistic structure + limit window')
   const b2 = res.beads.find((b) => b.sourceRange[0] === 2 && b.source.length === 1 && b.target.length === 1)
   const b3 = res.beads.find((b) => b.sourceRange[0] === 3 && b.source.length === 1 && b.target.length === 1)
   check('body stays aligned past the one-sided caption (no drift)', !!b2 && b2.targetRange[0] === 3 && !!b3 && b3.targetRange[0] === 4, JSON.stringify([b2 && b2.targetRange, b3 && b3.targetRange]))
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# sentence splitter ignores full stops that do not end a sentence')
+{
+  const s = splitSentences('Mr. Fogg lived at No. 7, Saville Row. He was rich. Phileas Fogg, esq., the member.')
+  check('"Mr." / "No. 7" / "esq.," do not split', s.length === 3, JSON.stringify(s))
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# sections come from heading structure, not heading words')
+{
+  const blocks = [
+    { text: 'OEUVRES', heading: true },
+    { text: 'DE VOLTAIRE', heading: true },
+    { text: 'Title page text.', heading: false },
+    { text: 'II', heading: true },
+    { text: 'WHAT BECAME OF CANDIDE', heading: true },
+    { text: 'Body one.', heading: false },
+    { text: 'Body two.', heading: false },
+  ]
+  const secs = buildSections(blocks)
+  check('stacked headings collapse into one section each', secs.length === 2, JSON.stringify(secs.map((s) => s.title)))
+  check('section text is the body only', secs[1].text === 'Body one.\nBody two.')
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# section alignment survives one-sided front and back matter')
+{
+  // Chapters of a translation, ~15% longer, with chapter titles in unrelated
+  // wording/numbering. The target adds an introduction with the same raw
+  // length as source chapter 1 (the Karamazov trap: 7,365 vs 7,647 chars) and
+  // a preface; the source adds endnotes nearly as long as its last chapter
+  // (the Candide trap: 8,184 vs 8,992 chars). Every chapter must still pair
+  // with its own counterpart.
+  const rng = makeRng(7)
+  const chapterLens = Array.from({ length: 20 }, () => 4000 + Math.floor(rng() * 16000))
+  const sec = (title, len) => ({ title, text: 'x'.repeat(len), length: len })
+  const src = [
+    ...chapterLens.map((l, i) => sec(`src-${i}`, l)),
+    sec('endnotes', Math.round(chapterLens[19] * 0.9)),
+  ]
+  const tgt = [
+    sec('intro', chapterLens[0]),
+    sec('preface', 3700),
+    ...chapterLens.map((l, i) => sec(`tgt-${i}`, Math.round(l * (1.15 + (rng() - 0.5) * 0.1)))),
+  ]
+  const pairs = alignSections(src, tgt, { strip: false })
+  const wrong = pairs.filter((p) => p.title.replace('src-', '') !== p.targetTitle.replace('tgt-', ''))
+  check('every chapter pairs with its counterpart', wrong.length === 0 && pairs.length === 20, `${pairs.length} pairs, wrong: ${JSON.stringify(wrong.map((p) => [p.title, p.targetTitle]))}`)
 }
 
 // ---------------------------------------------------------------------------
