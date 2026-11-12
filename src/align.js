@@ -77,10 +77,11 @@ export function sentenceSpans(line) {
 // A full stop that did not really end a sentence: the next piece starts with
 // a lowercase letter, digit or comma ("No. 7", "esq., the…"), or the previous
 // piece ends in a short capitalised abbreviation ("Mr.", "Dr.", "St.", "M.").
-// Uses letter case only, so it holds for any cased script. Kept to at most one
-// lowercase letter so real words ("Row.", "Rome.") still end sentences.
+// Abbreviations are a capital plus at most one lowercase letter ("Mr.",
+// "M."), or plus up to three lowercase consonants ("Mrs.", "Mgr.", "Bd."), so
+// real words ("Row.", "Rome.") still end sentences.
 const CONTINUATION_RE = /^[\p{Ll}\p{N},;:]/u
-const ABBREVIATION_RE = /(?:^|[\s(“"'‘«])\p{Lu}\p{Ll}?\.$/u
+const ABBREVIATION_RE = /(?:^|[\s(“"'‘«])\p{Lu}(\p{Ll}?|[b-df-hj-np-tv-xz]{2,3})\.$/u
 function isFalseBreak(prev, next) {
   return CONTINUATION_RE.test(next) || ABBREVIATION_RE.test(prev)
 }
@@ -189,7 +190,7 @@ export function alignLengths(sourceLens, targetLens, options = {}) {
           base + penalty + (flatSkips && skipBead ? 0 : lengthCost(l1, l2, c, s2, rel))
         if (cost < D[ni][nj]) {
           D[ni][nj] = cost
-          back[ni][nj] = [i, j, sn, tn]
+          back[ni][nj] = [i, j, sn, tn, penalty]
         }
       }
     }
@@ -201,8 +202,11 @@ export function alignLengths(sourceLens, targetLens, options = {}) {
   while (i > 0 || j > 0) {
     const step = back[i][j]
     if (!step) break
-    const [pi, pj, sn, tn] = step
-    beads.push({ s: pi, sn, t: pj, tn, cost: D[i][j] - D[pi][pj] })
+    const [pi, pj, sn, tn, penalty] = step
+    const cost = D[i][j] - D[pi][pj]
+    // lengthCost: the part of the cost due to the length mismatch alone
+    // (-100·log p), without the prior penalty for the bead shape.
+    beads.push({ s: pi, sn, t: pj, tn, cost, lengthCost: cost - penalty })
     i = pi
     j = pj
   }
@@ -263,26 +267,28 @@ export function alignTexts(sourceText, targetText, options = {}) {
 const SECTION_REL = 0.1
 const SECTION_SKIP_PENALTY = 200
 
-// `blocks` is the book in reading order: [{ text, heading: boolean, ref? }],
-// where `ref` is an opaque handle locating the block in the rendered book; it
-// is carried through to each body line so alignments can be shown on screen.
+// `blocks` is the book in reading order: [{ text, heading: boolean, kind?, ref? }],
+// where `ref` is an opaque handle locating the block in the rendered book (it
+// is carried through to each body line so alignments can be shown on screen)
+// and `kind` identifies a heading's markup, e.g. "h2.chapter" (see selectBody).
 // A section is a run of consecutive headings plus the body text after it, so
 // stacked headings ("II" + "WHAT BECAME OF CANDIDE…", or "OEUVRES / DE /
 // VOLTAIRE") collapse into one section title.
 export function buildSections(blocks) {
   const sections = []
   let cur = null
-  for (const { text, heading, ref } of blocks) {
+  for (const { text, heading, kind, ref } of blocks) {
     if (!text) continue
     if (heading) {
       if (!cur || cur.lines.length > 0) {
-        cur = { titles: [], lines: [] }
+        cur = { titles: [], kinds: [], lines: [] }
         sections.push(cur)
       }
       cur.titles.push(text)
+      if (kind && !cur.kinds.includes(kind)) cur.kinds.push(kind)
     } else {
       if (!cur) {
-        cur = { titles: [], lines: [] }
+        cur = { titles: [], kinds: [], lines: [] }
         sections.push(cur)
       }
       cur.lines.push({ text, ref })
@@ -294,23 +300,124 @@ export function buildSections(blocks) {
       // a whole contents page marked up as headings.
       s.titles.slice(-2).join(' · ') || s.lines[0]?.text.slice(0, 60) || '',
       s.lines,
+      s.kinds,
+      s.titles,
     ),
   )
 }
 
-function makeSection(title, lines) {
+function makeSection(title, lines, kinds = [], titles = []) {
   const text = lines.map((l) => l.text).join('\n')
-  return { title, lines, text, length: sentenceLength(text) }
+  return { title, titles, lines, kinds, text, length: sentenceLength(text) }
+}
+
+// ---------------------------------------------------------------------------
+// The story itself: from the first chapter to the last
+// ---------------------------------------------------------------------------
+//
+// Title pages, contents, introductions and prefaces before the first chapter,
+// and indexes, notes, licence text or "FIN" after the last, have no
+// counterpart (or the wrong one) in the other edition. selectBody() keeps only
+// the chapters, found by structure rather than wording:
+//
+// 1. Numbering. Chapter headings carry a number sequence — I, II, III… or
+//    1, 2, 3… — restarting at 1 for each part or book. The longest such run
+//    marks the chapters. Stray numerals ("TOME XXXIII", the year MDCCCXXIX)
+//    don't form a run and are ignored. Numerals are read in the first few
+//    words of a heading only, and roman numerals must be valid.
+// 2. Otherwise, heading markup: chapter headings are the most common kind of
+//    heading (e.g. "h2.chapter") among sections with real text.
+// Books with neither (fewer than `minChapters` chapters) are left unchanged.
+
+const ROMAN = /^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/
+const ROMAN_VALUE = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 }
+
+function numeralValue(token) {
+  if (/^\d{1,3}$/.test(token)) return Number(token)
+  if (!token || !ROMAN.test(token)) return null
+  let total = 0
+  for (let i = 0; i < token.length; i++) {
+    const v = ROMAN_VALUE[token[i]]
+    const next = ROMAN_VALUE[token[i + 1]] || 0
+    total += v < next ? -v : v
+  }
+  return total
+}
+
+// The chapter number of a section: a numeral among the first two words of
+// the last heading in its run that has one ("CHAPTER II.", "I. Fedor…").
+// A letter followed by an apostrophe is an elided word, not a numeral
+// (French "L'agent", "D'un").
+export function sectionNumber(section) {
+  const titles = section.titles || []
+  for (let i = titles.length - 1; i >= 0; i--) {
+    const words = [...titles[i].matchAll(/[\p{L}\p{N}]+/gu)].slice(0, 2)
+    for (const m of words) {
+      if (/['’]/.test(titles[i][m.index + m[0].length] || '')) continue
+      const n = numeralValue(m[0])
+      if (n) return n
+    }
+  }
+  return null
+}
+
+// { first, last, count } section indexes of the longest 1, 2, 3… run, or
+// null. A run may restart at 1 (a new part or book) and skip one missing
+// number; numbers that fit nowhere ("TOME XXXIII", a year) are ignored.
+function numberedRun(sections) {
+  let best = null
+  let run = null
+  sections.forEach((s, i) => {
+    const n = sectionNumber(s)
+    if (n === null) return
+    if (run && n > run.prev && n <= run.prev + 2) {
+      run.prev = n
+    } else if (run && n === 1 && run.count >= 2) {
+      run.prev = 1
+    } else if (n === 1) {
+      run = { first: i, last: i, prev: 1, count: 0 }
+    } else {
+      return
+    }
+    run.last = i
+    run.count++
+    if (!best || run.count > best.count) best = { ...run }
+  })
+  return best
+}
+
+function headingKindRun(sections, minLength) {
+  const counts = new Map()
+  for (const s of sections) {
+    if (s.length < minLength) continue
+    for (const k of s.kinds || []) counts.set(k, (counts.get(k) || 0) + 1)
+  }
+  let chapterKind = null
+  for (const [k, n] of counts) if (!chapterKind || n > counts.get(chapterKind)) chapterKind = k
+  if (!chapterKind) return null
+  const isChapter = (s) => (s.kinds || []).includes(chapterKind)
+  const first = sections.findIndex(isChapter)
+  let last = sections.length - 1
+  while (last > first && !isChapter(sections[last])) last--
+  return { first, last, count: counts.get(chapterKind) }
+}
+
+export function selectBody(sections, { minChapters = 3, minLength = 500 } = {}) {
+  const numbered = numberedRun(sections)
+  const run = numbered && numbered.count >= minChapters ? numbered : headingKindRun(sections, minLength)
+  if (!run || run.count < minChapters) return sections
+  return sections.slice(run.first, run.last + 1)
 }
 
 // Align two section lists. Returns matched pairs (both sides non-empty), each
 // { title, targetTitle, sourceText, targetText, sourceLines, targetLines }, in
-// reading order. Unmatched sections —
-// front matter, an introduction only one edition has, license text — fall out
-// as 1-0 / 0-1 beads.
+// reading order. Licence text and everything outside the chapters is left out
+// first (see dropBoilerplateSections, selectBody; `strip: false` keeps it).
+// Sections only one edition has fall out as 1-0 / 0-1 beads.
 export function alignSections(srcSections, tgtSections, options = {}) {
-  const src = options.strip === false ? srcSections : dropBoilerplateSections(srcSections)
-  const tgt = options.strip === false ? tgtSections : dropBoilerplateSections(tgtSections)
+  const prepare = (s) => (options.strip === false ? s : selectBody(dropBoilerplateSections(s)))
+  const src = prepare(srcSections)
+  const tgt = prepare(tgtSections)
   const srcLens = src.map((s) => s.length)
   const tgtLens = tgt.map((s) => s.length)
   const skip = options.skip ?? SECTION_SKIP_PENALTY
@@ -397,13 +504,13 @@ function dropBoilerplateSections(sections) {
   if (first !== -1) {
     const s = out[first]
     const at = s.lines.findIndex((l) => startRe.test(l.text))
-    out = [makeSection(s.title, s.lines.slice(at + 1)), ...out.slice(first + 1)]
+    out = [makeSection(s.title, s.lines.slice(at + 1), s.kinds, s.titles), ...out.slice(first + 1)]
   }
   const last = out.findIndex((s) => endRe.test(s.text))
   if (last !== -1) {
     const s = out[last]
     const at = s.lines.findIndex((l) => endRe.test(l.text))
-    out = [...out.slice(0, last), makeSection(s.title, s.lines.slice(0, at))]
+    out = [...out.slice(0, last), makeSection(s.title, s.lines.slice(0, at), s.kinds, s.titles)]
   }
   return out.filter((s) => s.length > 0)
 }
@@ -415,4 +522,31 @@ export function firstMatchedPairs(result, count = 3) {
   return result.beads
     .filter((b) => b.source.length > 0 && b.target.length > 0)
     .slice(0, count)
+}
+
+// ---------------------------------------------------------------------------
+// How Gale–Church rates a bead (for the heat map)
+// ---------------------------------------------------------------------------
+//
+// A bead's lengthCost is -100·log(p), p being how likely a length mismatch at
+// least this large is between a sentence and its translation. Thresholds were
+// calibrated on the bundled books: p < 1% flags ~2-4% of beads, p < 5% another
+// ~3-4%, and one-sided beads ~0.5%. 2-1 / 1-2 shapes are not flagged on their
+// own: translators split and merge sentences constantly (up to ~28% of beads).
+export const FLAG_LEVELS = ['unmatched', 'mismatch', 'loose'] // most → least severe
+const MISMATCH_COST = -100 * Math.log(0.01) // ≈ 460
+const LOOSE_COST = -100 * Math.log(0.05) // ≈ 300
+
+export function beadFlag(bead) {
+  if (bead.sn === 0 || bead.tn === 0) return 'unmatched'
+  if (bead.lengthCost > MISMATCH_COST) return 'mismatch'
+  if (bead.lengthCost > LOOSE_COST) return 'loose'
+  return null
+}
+
+// Probability behind a bead's length fit (1 = perfect fit), or null when one
+// side is empty and there is no length comparison to make.
+export function beadLengthP(bead) {
+  if (bead.sn === 0 || bead.tn === 0) return null
+  return Math.min(1, Math.exp(-bead.lengthCost / 100))
 }

@@ -16,6 +16,8 @@ import {
   sentenceSpans,
   alignLines,
   counterpartSentences,
+  beadFlag,
+  beadLengthP,
 } from './align.js'
 
 let failures = 0
@@ -262,6 +264,32 @@ console.log('\n# sentence positions and cross-side lookup (used for highlighting
   check('selecting one half of a 2-1 bead returns the whole bead', fromSrc.own.join() === '2,3' && fromSrc.other.join() === '2', JSON.stringify(fromSrc))
   const fromTgt = counterpartSentences(al, 'tgt', [0])
   check('lookup works from the translation side too', fromTgt.own.join() === '0' && fromTgt.other.join() === '0', JSON.stringify(fromTgt))
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# Gale–Church flags for the heat map')
+{
+  const bead = (sn, tn, lengthCost) => ({ sn, tn, lengthCost })
+  check('one-sided bead is "unmatched"', beadFlag(bead(1, 0, 0)) === 'unmatched' && beadFlag(bead(0, 1, 0)) === 'unmatched')
+  check('p < 1% is "mismatch"', beadFlag(bead(1, 1, -100 * Math.log(0.005))) === 'mismatch')
+  check('1% < p < 5% is "loose"', beadFlag(bead(1, 1, -100 * Math.log(0.03))) === 'loose')
+  check('a good fit is not flagged, whatever its shape', beadFlag(bead(1, 2, -100 * Math.log(0.5))) === null && beadFlag(bead(2, 2, 10)) === null)
+  check('length p is recovered from the cost', Math.abs(beadLengthP(bead(1, 1, -100 * Math.log(0.2))) - 0.2) < 1e-9 && beadLengthP(bead(1, 0, 0)) === null)
+
+  // Real alignments (one sentence per line, as the synthetic sentences start
+  // lowercase and the splitter would otherwise join them). Classic Gale–Church
+  // charges a 0-1 bead a length cost as if matched to nothing, so it hides an
+  // inserted sentence in a 1-2 / 2-1 bead rather than leaving it unmatched. A
+  // long insertion therefore shows as a "mismatch" where it was absorbed.
+  const rng = makeRng(5)
+  const src = Array.from({ length: 12 }, () => makeSentence(40 + rng() * 60, rng))
+  const lines = (arr) => arr.map((text) => ({ text }))
+  const same = alignLines(lines(src), lines(src))
+  check('identical text has no flags', same.beads.every((b) => beadFlag(b) === null))
+  const tgt = [...src.slice(0, 6), makeSentence(600, rng), ...src.slice(6)]
+  const al = alignLines(lines(src), lines(tgt))
+  const atInsert = al.beads.find((b) => b.t <= 6 && b.t + b.tn > 6)
+  check('a long inserted sentence is flagged where it was absorbed', !!atInsert && beadFlag(atInsert) === 'mismatch' && atInsert.tn >= 1, JSON.stringify(atInsert))
 }
 
 // ---------------------------------------------------------------------------

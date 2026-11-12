@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets (OpenAI key). Use .env.local or .env; neither may be committed.
+.env
+.env.*
+!.env.example

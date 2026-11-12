@@ -7,7 +7,7 @@ const MARGIN = 12
 // passage and its aligned translation to /api/rate-translation (ChatGPT, via
 // the dev server; see server/rateTranslation.js) and shows the 1-10 score and
 // the reasons. Mount it with a new `key` per selection to reset it.
-function RatingPopup({ original, translation, anchor, onClose }) {
+function RatingPopup({ original, translation, anchor, gc, onClose }) {
   const [state, setState] = useState({ phase: 'idle' }) // idle | loading | done | error
   const abortRef = useRef(null)
 
@@ -53,6 +53,8 @@ function RatingPopup({ original, translation, anchor, onClose }) {
         <p className="rate-passage rate-translation">{translation}</p>
       </div>
 
+      {gc && <GaleChurchLine gc={gc} />}
+
       {state.phase === 'idle' && (
         <button className="rate-button" onClick={rate}>
           Rate this translation
@@ -70,6 +72,28 @@ function RatingPopup({ original, translation, anchor, onClose }) {
       {state.phase === 'done' && <RatingResult rating={state.rating} />}
     </div>
   )
+}
+
+// How the length-based aligner saw this passage: sentences matched (e.g.
+// "1→2"), how plausible the length ratio is, and its flag, if any.
+const GC_VERDICT = {
+  unmatched: 'no counterpart',
+  mismatch: 'length mismatch',
+  loose: 'unusual length',
+}
+function GaleChurchLine({ gc }) {
+  const fit = gc.p === null ? null : gc.p >= 0.1 ? 'lengths fit' : `length fit p ≈ ${formatP(gc.p)}`
+  return (
+    <p className={`rate-gc${gc.flag ? ` flag-${gc.flag}` : ''}`}>
+      Gale–Church: {gc.shapes.join(', ')} sentences
+      {fit && ` · ${fit}`}
+      {gc.flag && ` · ${GC_VERDICT[gc.flag]}`}
+    </p>
+  )
+}
+function formatP(p) {
+  if (p < 0.001) return '<0.1%'
+  return `${(p * 100).toFixed(p < 0.01 ? 1 : 0)}%`
 }
 
 function RatingResult({ rating }) {

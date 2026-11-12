@@ -12,7 +12,7 @@
 // CSS Custom Highlight API, which paints ranges without touching the book's
 // DOM; they are re-applied whenever epubjs (re)renders a chapter.
 
-import { alignLines, counterpartSentences } from './align.js'
+import { alignLines, beadFlag, beadLengthP, counterpartSentences, FLAG_LEVELS } from './align.js'
 import { blockKey, leafBlocks } from './chapters.js'
 
 const PICKED_COLOR = 'rgba(255, 190, 0, 0.45)' // what you selected
@@ -24,12 +24,20 @@ const OTHER = { src: 'tgt', tgt: 'src' }
 // ---------------------------------------------------------------------------
 
 // `pairs` are matched section pairs from alignSections(). Sentence alignment
-// of a pair is computed the first time something in it is selected.
+// of a pair is computed the first time it is needed, then cached.
+// Returns { link, heat }.
 export function createLinker(pairs) {
   const index = { src: new Map(), tgt: new Map() }
+  const pairsBySpine = { src: new Map(), tgt: new Map() }
   pairs.forEach((p, pair) => {
-    p.sourceLines.forEach((l, line) => l.ref && index.src.set(blockKey(l.ref.spine, l.ref.ord), { pair, line }))
-    p.targetLines.forEach((l, line) => l.ref && index.tgt.set(blockKey(l.ref.spine, l.ref.ord), { pair, line }))
+    for (const [side, lines] of [['src', p.sourceLines], ['tgt', p.targetLines]]) {
+      lines.forEach((l, line) => {
+        if (!l.ref) return
+        index[side].set(blockKey(l.ref.spine, l.ref.ord), { pair, line })
+        if (!pairsBySpine[side].has(l.ref.spine)) pairsBySpine[side].set(l.ref.spine, new Set())
+        pairsBySpine[side].get(l.ref.spine).add(pair)
+      })
+    }
   })
 
   const cache = new Map()
@@ -37,21 +45,32 @@ export function createLinker(pairs) {
     if (!cache.has(pair)) cache.set(pair, alignLines(pairs[pair].sourceLines, pairs[pair].targetLines))
     return cache.get(pair)
   }
+  // Sentence ids on one side of a pair -> pieces locating them on screen.
+  const toPieces = (pair, side, ids) => {
+    const alignment = alignmentFor(pair)
+    const lines = side === 'src' ? pairs[pair].sourceLines : pairs[pair].targetLines
+    return ids.map((k) => {
+      const s = alignment[side][k]
+      const { spine, ord } = lines[s.line].ref
+      return { spine, ord, start: s.start, end: s.end, text: lines[s.line].text.slice(s.start, s.end) }
+    })
+  }
+  const beadRange = (bead, side) => (side === 'src' ? [bead.s, bead.sn] : [bead.t, bead.tn])
 
   // pieces: [{ spine, ord, start, end }] selected on `side`. Returns
-  // { own, other } as pieces to highlight on each side, or null when the
-  // selection is not in aligned body text (a heading, front matter, …).
-  return function link(side, pieces) {
+  // { own, other, beads } — pieces to highlight on each side plus the beads
+  // involved — or null when the selection is not in aligned body text (a
+  // heading, front matter, …).
+  function link(side, pieces) {
     const hits = pieces
       .map((piece) => ({ piece, at: index[side].get(blockKey(piece.spine, piece.ord)) }))
       .filter((h) => h.at)
     if (hits.length === 0) return null
     const pair = hits[0].at.pair
     const alignment = alignmentFor(pair)
-    const sentences = alignment[side]
 
     const hitSentences = []
-    sentences.forEach((s, k) => {
+    alignment[side].forEach((s, k) => {
       const touched = hits.some(
         (h) => h.at.pair === pair && h.at.line === s.line && s.start < h.piece.end && s.end > h.piece.start,
       )
@@ -60,16 +79,84 @@ export function createLinker(pairs) {
     if (hitSentences.length === 0) return null
 
     const { own, other } = counterpartSentences(alignment, side, hitSentences)
-    const toPieces = (whichSide, ids) => {
-      const lines = whichSide === 'src' ? pairs[pair].sourceLines : pairs[pair].targetLines
-      return ids.map((k) => {
-        const s = alignment[whichSide][k]
-        const { spine, ord } = lines[s.line].ref
-        return { spine, ord, start: s.start, end: s.end, text: lines[s.line].text.slice(s.start, s.end) }
-      })
-    }
-    return { own: toPieces(side, own), other: toPieces(OTHER[side], other) }
+    const ownSet = new Set(own)
+    const beads = alignment.beads.filter((b) => {
+      const [start, count] = beadRange(b, side)
+      for (let k = start; k < start + count; k++) if (ownSet.has(k)) return true
+      return false
+    })
+    return { own: toPieces(pair, side, own), other: toPieces(pair, OTHER[side], other), beads }
   }
+
+  // Both sides of a bead as pieces, plus its text and a content key.
+  const beadInfo = new WeakMap()
+  function describe(pair, bead) {
+    if (!beadInfo.has(bead)) {
+      const idsOf = (side) => {
+        const [start, count] = beadRange(bead, side)
+        return Array.from({ length: count }, (_, k) => start + k)
+      }
+      const src = toPieces(pair, 'src', idsOf('src'))
+      const tgt = toPieces(pair, 'tgt', idsOf('tgt'))
+      const original = src.map((p) => p.text).join(' ')
+      const translation = tgt.map((p) => p.text).join(' ')
+      beadInfo.set(bead, { src, tgt, original, translation, key: pairKey(original, translation) })
+    }
+    return beadInfo.get(bead)
+  }
+
+  // Sentences in chapter file `spine` on `side`, grouped by the level
+  // `classify(bead, info)` gives them (null = not shown). Defaults to the
+  // Gale–Church flags: { unmatched, mismatch, loose } (see beadFlag).
+  function heat(side, spine, classify = beadFlag) {
+    const out = {}
+    for (const pair of pairsBySpine[side].get(spine) || []) {
+      for (const bead of alignmentFor(pair).beads) {
+        const info = describe(pair, bead)
+        const level = classify(bead, info)
+        if (!level) continue
+        for (const piece of info[side]) {
+          if (piece.spine === spine) (out[level] ||= []).push(piece)
+        }
+      }
+    }
+    return out
+  }
+
+  // Every bead in the book, in reading order:
+  // [{ key, original, translation, src, tgt, gcFlag, gcP, section }].
+  // Aligning a long book takes a few seconds, so this yields to the page
+  // between sections and reports progress as (done, total).
+  async function allBeads(onProgress) {
+    const out = []
+    for (let pair = 0; pair < pairs.length; pair++) {
+      for (const bead of alignmentFor(pair).beads) {
+        out.push({ ...describe(pair, bead), gcFlag: beadFlag(bead), gcP: beadLengthP(bead), section: pairs[pair].title })
+      }
+      onProgress?.(pair + 1, pairs.length)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    return out
+  }
+
+  return { link, heat, allBeads }
+}
+
+// A short, stable key for a passage pair's text (53-bit cyrb53 hash), used to
+// cache scan results: the same text always maps to the same result, however
+// the alignment code changes around it.
+export function pairKey(original, translation) {
+  const str = `${original}\u0000${translation}`
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i)
+    h1 = Math.imul(h1 ^ ch, 2654435761)
+    h2 = Math.imul(h2 ^ ch, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
 }
 
 // ---------------------------------------------------------------------------
@@ -134,11 +221,14 @@ function selectionPieces(contents) {
 
 // DOM Ranges for the pieces that fall in this rendered chapter.
 function piecesToRanges(doc, spine, pieces) {
+  if (!pieces.some((p) => p.spine === spine)) return []
   const blocks = leafBlocks(doc)
+  const pointsByOrd = new Map() // a paragraph often holds several pieces
   const ranges = []
   for (const p of pieces) {
     if (p.spine !== spine || !blocks[p.ord]) continue
-    const points = textPoints(blocks[p.ord].el)
+    if (!pointsByOrd.has(p.ord)) pointsByOrd.set(p.ord, textPoints(blocks[p.ord].el))
+    const points = pointsByOrd.get(p.ord)
     const end = Math.min(p.end, points.length)
     if (p.start >= end) continue
     const first = points[p.start]
@@ -155,44 +245,102 @@ function piecesToRanges(doc, spine, pieces) {
 // Painting
 // ---------------------------------------------------------------------------
 
+// Paint `pieces` in one rendered chapter as the named highlight. Higher
+// `priority` draws on top where highlights overlap. Returns the first
+// painted { range, contents }, or null.
+function paintHighlight(contents, name, color, priority, pieces) {
+  const win = contents.window
+  if (!win || !win.CSS || !win.CSS.highlights || typeof win.Highlight !== 'function') return null
+  const doc = contents.document
+  const styleId = `${name}-style`
+  if (!doc.getElementById(styleId) && doc.head) {
+    const style = doc.createElement('style')
+    style.id = styleId
+    style.textContent = `::highlight(${name}) { background-color: ${color}; }`
+    doc.head.appendChild(style)
+  }
+  const ranges = piecesToRanges(doc, contents.sectionIndex, pieces)
+  if (ranges.length === 0) {
+    win.CSS.highlights.delete(name)
+    return null
+  }
+  const highlight = new win.Highlight(...ranges)
+  highlight.priority = priority
+  win.CSS.highlights.set(name, highlight)
+  return { range: ranges[0], contents }
+}
+
 // One named highlight in one rendition. set() paints the pieces in every
 // rendered chapter and returns the first painted { range, contents }.
-function createPainter(rendition, name, color) {
+function createPainter(rendition, name, color, priority) {
   let pieces = []
-
-  function paint(contents) {
-    const win = contents.window
-    if (!win || !win.CSS || !win.CSS.highlights || typeof win.Highlight !== 'function') return null
-    const doc = contents.document
-    const styleId = `${name}-style`
-    if (!doc.getElementById(styleId) && doc.head) {
-      const style = doc.createElement('style')
-      style.id = styleId
-      style.textContent = `::highlight(${name}) { background-color: ${color}; }`
-      doc.head.appendChild(style)
-    }
-    const ranges = piecesToRanges(doc, contents.sectionIndex, pieces)
-    if (ranges.length) win.CSS.highlights.set(name, new win.Highlight(...ranges))
-    else win.CSS.highlights.delete(name)
-    return ranges.length ? { range: ranges[0], contents } : null
-  }
-
   // Re-apply when epubjs renders (or re-renders) a chapter.
   rendition.hooks.content.register((contents) => {
-    if (pieces.length) paint(contents)
+    if (pieces.length) paintHighlight(contents, name, color, priority, pieces)
   })
-
   return {
     set(next) {
       pieces = next
       let first = null
       for (const contents of rendition.getContents()) {
-        const hit = paint(contents)
+        const hit = paintHighlight(contents, name, color, priority, pieces)
         if (hit && !first) first = hit
       }
       return first
     },
   }
+}
+
+// Heat maps for one pane: each rendered chapter's sentences, tinted by the
+// level a classifier gives their bead. Chapters are computed as they render,
+// so a long book costs nothing up front. Two maps exist:
+//   Gale–Church — beadFlag (align.js): length-based suspicion
+//   ChatGPT     — scanLevel (scan.js): the cheap model's whole-book scan
+export const HEAT_COLORS = {
+  unmatched: 'rgba(220, 0, 0, 0.38)', // no counterpart: omitted or added
+  mismatch: 'rgba(220, 0, 0, 0.22)', // length fit p < 1%
+  loose: 'rgba(220, 0, 0, 0.10)', // length fit p < 5%
+}
+export const SCAN_COLORS = {
+  not_matching: 'rgba(130, 0, 200, 0.30)', // ChatGPT: the pair isn't a translation of each other
+  bad: 'rgba(0, 90, 255, 0.32)', // ChatGPT score 1-3
+  weak: 'rgba(0, 90, 255, 0.14)', // ChatGPT score 4-5
+}
+function createHeatPainter(rendition, side, getLinker, { prefix, colors, classify }) {
+  let enabled = false
+  const paint = (contents) => {
+    const linker = getLinker()
+    const levels = enabled && linker ? linker.heat(side, contents.sectionIndex, classify()) : {}
+    for (const level of Object.keys(colors)) {
+      paintHighlight(contents, `${prefix}-${level}`, colors[level], 0, levels[level] || [])
+    }
+  }
+  rendition.hooks.content.register((contents) => {
+    if (enabled) paint(contents)
+  })
+  return {
+    set(next) {
+      enabled = next
+      for (const contents of rendition.getContents()) paint(contents)
+    },
+    refresh() {
+      if (enabled) for (const contents of rendition.getContents()) paint(contents)
+    },
+  }
+}
+
+// How Gale–Church judged the beads behind a selection, for the popup:
+// { shapes: ['1→2', …], flag: worst flag or null, p: worst length fit or null }.
+function describeBeads(beads) {
+  let flag = null
+  let p = null
+  for (const b of beads) {
+    const f = beadFlag(b)
+    if (f && (!flag || FLAG_LEVELS.indexOf(f) < FLAG_LEVELS.indexOf(flag))) flag = f
+    const bp = beadLengthP(b)
+    if (bp !== null && (p === null || bp < p)) p = bp
+  }
+  return { shapes: beads.map((b) => `${b.sn}→${b.tn}`), flag, p }
 }
 
 // The nearest ancestor of `el` that actually scrolls vertically.
@@ -243,13 +391,19 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // Wires two renditions together. attach(side, rendition) as each pane is
 // created (null when destroyed); setLinker() once the alignment is ready.
 // `onStatus(text)` reports when a selection has no counterpart.
-// `onLink({ original, translation, anchor })` fires after each successful
+// `onLink({ original, translation, anchor, gc })` fires after each successful
 // selection with the matched passages (original book's text first, whichever
-// side was selected) and the selection's on-screen box, for the popup; it
-// fires with null when a new selection has no match.
+// side was selected), the selection's on-screen box, and how Gale–Church
+// judged them (see describeBeads), for the popup; it fires with null when a
+// new selection has no match. setHeat(true) shows the Gale–Church heat map;
+// setScanView(true, classify) shows the ChatGPT scan's (see scan.js).
+// focus({ src, tgt }) highlights a pair and scrolls both panes to it.
 export function createCrossHighlighter({ onStatus, onLink } = {}) {
   const panes = { src: null, tgt: null }
-  let link = null
+  let linker = null
+  let heatOn = false
+  let scanOn = false
+  let scanClassify = () => null
   let generation = 0
 
   function clearAll() {
@@ -260,17 +414,19 @@ export function createCrossHighlighter({ onStatus, onLink } = {}) {
     }
   }
 
-  async function reveal(pane, pieces) {
+  // Paint `pieces` with `painter` in `pane` and scroll the pane to them,
+  // opening their chapter first if it is not rendered.
+  async function reveal(pane, painter, pieces) {
+    if (!pane || pieces.length === 0) return
     const token = generation
-    let hit = pane.match.set(pieces)
+    let hit = painter.set(pieces)
     if (!hit) {
-      // The counterpart's chapter is not rendered yet: open it first.
       const section = pane.rendition.book.spine.get(pieces[0].spine)
       if (!section) return
       await pane.rendition.display(section.href)
       if (token !== generation) return
       await nextFrame()
-      hit = pane.match.set(pieces)
+      hit = painter.set(pieces)
     }
     // Scrolling can make epubjs load or drop neighbouring chapters, shifting
     // the layout, so re-measure and correct until the highlight stays put.
@@ -278,19 +434,19 @@ export function createCrossHighlighter({ onStatus, onLink } = {}) {
       if (scrollToRange(hit) < 20 && attempt > 0) break
       await wait(120)
       if (token !== generation) return
-      hit = pane.match.set(pieces)
+      hit = painter.set(pieces)
     }
   }
 
   function handleSelection(side, contents) {
     const sel = contents.window && contents.window.getSelection()
-    if (!sel || sel.isCollapsed || !link) return
+    if (!sel || sel.isCollapsed || !linker) return
     const pieces = selectionPieces(contents)
     if (pieces.length === 0) return
 
     generation++
     clearAll()
-    const result = link(side, pieces)
+    const result = linker.link(side, pieces)
     if (!result) {
       onLink?.(null)
       onStatus?.('That passage has no aligned counterpart.')
@@ -311,8 +467,9 @@ export function createCrossHighlighter({ onStatus, onLink } = {}) {
       original: text(srcPieces),
       translation: text(tgtPieces),
       anchor: picked ? screenBox(picked) : null,
+      gc: describeBeads(result.beads),
     })
-    reveal(other, result.other)
+    reveal(other, other.match, result.other)
   }
 
   return {
@@ -323,14 +480,48 @@ export function createCrossHighlighter({ onStatus, onLink } = {}) {
       }
       panes[side] = {
         rendition,
-        picked: createPainter(rendition, 'xh-picked', PICKED_COLOR),
-        match: createPainter(rendition, 'xh-match', MATCH_COLOR),
+        // Selection colours sit above the heat map where they overlap.
+        picked: createPainter(rendition, 'xh-picked', PICKED_COLOR, 2),
+        match: createPainter(rendition, 'xh-match', MATCH_COLOR, 2),
+        heat: createHeatPainter(rendition, side, () => linker, {
+          prefix: 'gc',
+          colors: HEAT_COLORS,
+          classify: () => beadFlag,
+        }),
+        scan: createHeatPainter(rendition, side, () => linker, {
+          prefix: 'scan',
+          colors: SCAN_COLORS,
+          classify: () => scanClassify,
+        }),
       }
+      if (heatOn) panes[side].heat.set(true)
+      if (scanOn) panes[side].scan.set(true)
       const onRelease = (_event, contents) => handleSelection(side, contents)
       for (const type of ['mouseup', 'touchend', 'keyup']) rendition.on(type, onRelease)
     },
     setLinker(next) {
-      link = next
+      linker = next
+      for (const pane of Object.values(panes)) {
+        pane?.heat.refresh()
+        pane?.scan.refresh()
+      }
+    },
+    setHeat(on) {
+      heatOn = on
+      for (const pane of Object.values(panes)) pane?.heat.set(on)
+    },
+    // classify(bead, info) -> level in SCAN_COLORS, or null.
+    setScanView(on, classify) {
+      scanOn = on
+      if (classify) scanClassify = classify
+      for (const pane of Object.values(panes)) pane?.scan.set(on)
+    },
+    focus({ src, tgt }) {
+      generation++
+      clearAll()
+      onLink?.(null)
+      reveal(panes.src, panes.src?.picked, src)
+      reveal(panes.tgt, panes.tgt?.match, tgt)
     },
   }
 }

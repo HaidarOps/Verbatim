@@ -3,7 +3,9 @@ import { useParams } from 'react-router-dom'
 import ePub from 'epubjs'
 import { loadSections } from './chapters.js'
 import { alignSections, alignTexts, firstMatchedPairs } from './align.js'
-import { createCrossHighlighter, createLinker } from './parallel.js'
+import { createCrossHighlighter, createLinker, HEAT_COLORS, SCAN_COLORS } from './parallel.js'
+import { scanLevel } from './scan.js'
+import ScanPanel from './ScanPanel.jsx'
 import RatingPopup from './RatingPopup.jsx'
 
 // Pre-select the first matched section with real body text on both sides, so
@@ -40,6 +42,23 @@ function EpubPane({ url, className, watchResize, onRendition }) {
     onRenditionRef.current?.(rendition)
     rendition.display()
 
+    // epubjs loads the next/previous chapter when it sees the pane scroll near
+    // an end, but it ignores the scroll event that follows its own internal
+    // scrolling. A single big jump (dragging the scrollbar, End, a programmatic
+    // scroll) is then missed and the pane gets stuck on the current chapter.
+    // Ask it to re-check after every scroll, once the scrolling settles.
+    let checkTimer = null
+    const onScroll = () => {
+      clearTimeout(checkTimer)
+      checkTimer = setTimeout(() => {
+        const manager = rendition.manager
+        if (manager && manager.q && typeof manager.check === 'function') {
+          manager.q.enqueue(() => manager.check()).catch(() => {})
+        }
+      }, 60)
+    }
+    el.addEventListener('scroll', onScroll, { capture: true, passive: true })
+
     let observer = null
     let rafId = null
     if (watchResize) {
@@ -57,6 +76,8 @@ function EpubPane({ url, className, watchResize, onRendition }) {
     }
 
     return () => {
+      el.removeEventListener('scroll', onScroll, { capture: true })
+      clearTimeout(checkTimer)
       observer?.disconnect()
       if (rafId) cancelAnimationFrame(rafId)
       onRenditionRef.current?.(null)
@@ -184,9 +205,11 @@ function Pair({ index, pair }) {
 // other book to it. See parallel.js.
 function CompareReader({ book }) {
   const [showAlign, setShowAlign] = useState(false)
+  const [showScan, setShowScan] = useState(false)
   const [status, setStatus] = useState('')
-  const [linked, setLinked] = useState(null) // { id, original, translation, anchor }
+  const [linked, setLinked] = useState(null) // { id, original, translation, anchor, gc }
   const { sections, error } = useParallelBooks(book.url, book.translationUrl)
+  const linker = useMemo(() => (sections ? createLinker(sections) : null), [sections])
 
   const [highlighter] = useState(() =>
     createCrossHighlighter({
@@ -196,8 +219,37 @@ function CompareReader({ book }) {
   )
   const closePopup = useCallback(() => setLinked(null), [])
   useEffect(() => {
-    highlighter.setLinker(sections ? createLinker(sections) : null)
-  }, [highlighter, sections])
+    highlighter.setLinker(linker)
+  }, [highlighter, linker])
+
+  // Gale–Church heat map: tints the sentences the aligner finds suspicious.
+  const [heat, setHeat] = useState(false)
+  useEffect(() => {
+    highlighter.setHeat(heat)
+  }, [highlighter, heat])
+
+  // ChatGPT whole-book scan: results saved so far (on the dev server), and a
+  // second heat map showing the passages it scored low.
+  const [scan, setScan] = useState({ model: '', results: {} })
+  useEffect(() => {
+    let alive = true
+    fetch(`/api/scan?book=${encodeURIComponent(book.id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => alive && data && setScan({ model: data.model, results: data.results || {} }))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [book.id])
+  const addScanResults = useCallback(
+    (fresh) => setScan((s) => ({ ...s, results: { ...s.results, ...fresh } })),
+    [],
+  )
+  const scanCount = Object.keys(scan.results).length
+  const [scanView, setScanView] = useState(false)
+  useEffect(() => {
+    highlighter.setScanView(scanView, (_bead, info) => scanLevel(scan.results[info.key]))
+  }, [highlighter, scanView, scan.results])
 
   // Status messages fade after a few seconds.
   useEffect(() => {
@@ -215,10 +267,33 @@ function CompareReader({ book }) {
 
   return (
     <div className="reader-compare">
-      <button className="align-button" onClick={() => setShowAlign(true)}>
-        Align
-      </button>
+      <div className="compare-toolbar">
+        <button className="align-button" onClick={() => setShowAlign(true)}>
+          Align
+        </button>
+        <button
+          className={`align-button${heat ? ' active' : ''}`}
+          onClick={() => setHeat((on) => !on)}
+          aria-pressed={heat}
+          title="Tint the sentences Gale–Church finds suspicious"
+        >
+          Gale–Church view
+        </button>
+        <button className="align-button" onClick={() => setShowScan(true)} disabled={!linker}>
+          ChatGPT scan
+        </button>
+        <button
+          className={`align-button${scanView ? ' active' : ''}`}
+          onClick={() => setScanView((on) => !on)}
+          aria-pressed={scanView}
+          disabled={scanCount === 0}
+          title={scanCount ? 'Tint the passages ChatGPT scored low' : 'Run a ChatGPT scan first'}
+        >
+          ChatGPT view
+        </button>
+      </div>
       {note && <div className="compare-status">{note}</div>}
+      {(heat || scanView) && <HeatLegend gc={heat} scan={scanView} />}
       <EpubPane className="epub-pane" url={book.url} onRendition={attachSource} />
       <EpubPane className="epub-pane" url={book.translationUrl} onRendition={attachTarget} />
       {linked && (
@@ -227,6 +302,7 @@ function CompareReader({ book }) {
           original={linked.original}
           translation={linked.translation}
           anchor={linked.anchor}
+          gc={linked.gc}
           onClose={closePopup}
         />
       )}
@@ -238,6 +314,47 @@ function CompareReader({ book }) {
           onClose={() => setShowAlign(false)}
         />
       )}
+      {showScan && linker && (
+        <ScanPanel
+          linker={linker}
+          book={book.id}
+          scan={scan}
+          onResults={addScanResults}
+          onFocus={(pair) => {
+            setShowScan(false)
+            highlighter.focus(pair)
+          }}
+          onClose={() => setShowScan(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+// Key for the heat maps. Colours come from parallel.js so they always match.
+const HEAT_LABELS = {
+  unmatched: 'No counterpart (omitted or added)',
+  mismatch: 'Length mismatch (p < 1%)',
+  loose: 'Unusual length (p < 5%)',
+}
+const SCAN_LABELS = {
+  not_matching: 'ChatGPT: not a translation of each other',
+  bad: 'ChatGPT: score 1–3',
+  weak: 'ChatGPT: score 4–5',
+}
+function HeatLegend({ gc, scan }) {
+  const items = [
+    ...(gc ? Object.entries(HEAT_LABELS).map(([level, label]) => [label, HEAT_COLORS[level]]) : []),
+    ...(scan ? Object.entries(SCAN_LABELS).map(([level, label]) => [label, SCAN_COLORS[level]]) : []),
+  ]
+  return (
+    <div className="heat-legend">
+      {items.map(([label, color]) => (
+        <span key={label} className="heat-item">
+          <span className="heat-swatch" style={{ background: color }} />
+          {label}
+        </span>
+      ))}
     </div>
   )
 }
