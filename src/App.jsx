@@ -18,6 +18,7 @@ const BUNDLED_BOOKS = [
     name: 'Around the World in Eighty Days (French / English)',
     url: `${BASE}books/around_the_world_fr.epub`,
     translationUrl: `${BASE}books/around_the_world_en.epub`,
+    englishSide: 'translation',
   },
   {
     id: 'karamazov',

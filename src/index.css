@@ -120,6 +120,10 @@ a {
   user-select: text;
 }
 
+.reader-compare .epub-pane.pane-hidden {
+  display: none;
+}
+
 .reader-compare .epub-pane + .epub-pane {
   border-left: 1px solid #000;
 }
