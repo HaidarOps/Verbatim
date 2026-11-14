@@ -14,7 +14,8 @@ const BOOKS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 export async function serveBooks() {
   const server = createServer(async (req, res) => {
     const name = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/books\//, '')
-    if (!/^[\w.-]+\.epub$/.test(name)) {
+    // Any file name (Greek, accents, spaces…) but no path separators.
+    if (!/^[^/\\]+\.epub$/u.test(name) || name.startsWith('.')) {
       res.statusCode = 404
       return res.end()
     }

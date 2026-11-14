@@ -55,6 +55,7 @@ export function blockKey(spine, ord) {
 const NOTE_TYPE = /(^|\s)(doc-)?(foot|end|rear)?notes?(\s|$)/i
 const NOTE_CLASS = /footnote|endnote|fnote|transnote|trnote|^notes?$/i
 const FIGURE_CLASS = /^fig|caption|illus/i
+const NOTE_ID = /^(fn|ftn|footnote|endnote|note|en)[-_.]?\d+$/i
 const NOTE_MARKER = /^\s*\[\d+\]/
 const ILLUSTRATION = /^\s*\[illus/i
 const SHORT_MARK = /^\s*[[(]?(\d{1,3}|[*†‡§]+|[a-z])[\])]?\s*$/i
@@ -65,7 +66,7 @@ function classTokens(el) {
 }
 
 // Why a block is left out of the alignment ('note' | 'figure' |
-// 'navigation'), or null when it is story text.
+// 'navigation' | 'licence'), or null when it is story text.
 export function excludedReason(el, text) {
   if (NOTE_MARKER.test(text)) return 'note'
   if (ILLUSTRATION.test(text)) return 'figure'
@@ -75,6 +76,12 @@ export function excludedReason(el, text) {
     if (tag === 'body' || tag === 'html') break
     if (tag === 'figure' || tag === 'figcaption') return 'figure'
     if (tag === 'aside') return 'note'
+    // A note's anchor id ("fn12", "note-3", "footnote_7"), the target of the
+    // reference link in the text.
+    if (NOTE_ID.test(node.getAttribute('id') || '')) return 'note'
+    // Project Gutenberg's own header and licence (newer editions mark them up).
+    if (/^pg-(header|footer)$/.test(node.getAttribute('id') || '')) return 'licence'
+    if (classTokens(node).includes('pg-boilerplate')) return 'licence'
     const type = `${node.getAttribute('epub:type') || ''} ${node.getAttribute('role') || ''}`
     if (NOTE_TYPE.test(type)) return 'note'
     const classes = classTokens(node)
@@ -109,14 +116,14 @@ function headingKind(el) {
 // Read an epub's text and split it into sections (see buildSections in
 // align.js). Each body line carries `ref: { spine, ord }` locating it on
 // screen. Whether a block is a heading comes from its tag, never its wording.
-// Returns { sections, excluded: { note, figure, navigation } (counts) }.
+// Returns { sections, excluded: { note, figure, navigation, licence } (counts) }.
 // The book is closed again before returning.
 export async function readBook(url) {
   const book = ePub(url, { openAs: 'epub' })
   try {
     await book.ready
     const blocks = []
-    const excluded = { note: 0, figure: 0, navigation: 0 }
+    const excluded = { note: 0, figure: 0, navigation: 0, licence: 0 }
     for (const item of book.spine.spineItems) {
       if (item.linear === false || item.linear === 'no') continue
       const root = await item.load(book.load.bind(book))
