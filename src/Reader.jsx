@@ -53,22 +53,9 @@ function EpubPane({ url, className, watchResize, onRendition }) {
     onRenditionRef.current?.(rendition)
     rendition.display()
 
-    // epubjs loads the next/previous chapter when it sees the pane scroll near
-    // an end, but it ignores the scroll event that follows its own internal
-    // scrolling. A single big jump (dragging the scrollbar, End, a programmatic
-    // scroll) is then missed and the pane gets stuck on the current chapter.
-    // Ask it to re-check after every scroll, once the scrolling settles.
-    let checkTimer = null
-    const onScroll = () => {
-      clearTimeout(checkTimer)
-      checkTimer = setTimeout(() => {
-        const manager = rendition.manager
-        if (manager && manager.q && typeof manager.check === 'function') {
-          manager.q.enqueue(() => manager.check()).catch(() => {})
-        }
-      }, 60)
-    }
-    el.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    // (With FULL_BOOK_OFFSET every section is rendered up front, so the old
+    // scroll-triggered manager.check() workaround for lazy-load jumps is no
+    // longer needed — and dropping it avoids check/update churn while scrolling.)
 
     let observer = null
     let rafId = null
@@ -87,8 +74,6 @@ function EpubPane({ url, className, watchResize, onRendition }) {
     }
 
     return () => {
-      el.removeEventListener('scroll', onScroll, { capture: true })
-      clearTimeout(checkTimer)
       observer?.disconnect()
       if (rafId) cancelAnimationFrame(rafId)
       onRenditionRef.current?.(null)
