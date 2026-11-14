@@ -18,6 +18,10 @@ import {
   counterpartSentences,
   beadFlag,
   beadLengthP,
+  isMatterHeading,
+  dropEditorialMatter,
+  sectionNumber,
+  selectBody,
 } from './align.js'
 
 let failures = 0
@@ -290,6 +294,63 @@ console.log('\n# Gale–Church flags for the heat map')
   const al = alignLines(lines(src), lines(tgt))
   const atInsert = al.beads.find((b) => b.t <= 6 && b.t + b.tn > 6)
   check('a long inserted sentence is flagged where it was absorbed', !!atInsert && beadFlag(atInsert) === 'mismatch' && atInsert.tn >= 1, JSON.stringify(atInsert))
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# introductions, prefaces and notes are recognised by their heading')
+{
+  for (const h of ['INTRODUCTION.', 'THE INTRODUCTION', 'Introduction to the Symposium', "Translator's Preface", 'Préface', 'Avant-propos', 'Vorwort', 'ΕΙΣΑΓΩΓΗ', 'ΠΡΟΛΟΓΟΣ', 'Предисловие', 'Contents', 'NOTES', 'Appendix B', 'Anmerkungen']) {
+    check(`"${h}" is editorial matter`, isMatterHeading(h))
+  }
+  for (const h of ['Notes from Underground', 'CHAPTER I', 'SYMPOSIUM', 'The Introduction of Mr. Fogg to Society', 'BOOK I', "ΒΙΒΛΙΟΝ Α'.", 'Index of Forbidden Books and Other Stories']) {
+    check(`"${h}" is not`, !isMatterHeading(h))
+  }
+}
+{
+  // The Greek Symposium: an introduction (h3) with numbered and "***" (h4)
+  // sub-sections, then the dialogue (h3) with its speeches (h4).
+  const sec = (titles, levels, len) => ({ titles, levels, title: titles.join(' · '), text: 'x'.repeat(len), length: len, lines: [], kinds: levels.map((l) => 'h' + l) })
+  const book = [
+    sec(['ΠΛΑΤΩΝ', 'ΣΥΜΠΟΣΙΟΝ'], [1, 1], 100),
+    sec(['ΕΙΣΑΓΩΓΗ', 'I. Ανάλυσις του διαλόγου.'], [3, 4], 1400),
+    sec(['***'], [4], 7500),
+    sec(['ΙΙ ΣΗΜΑΣΙΑ ΤΟΥ ΕΡΩΤΟΣ'], [4], 3700),
+    sec(['ΠΛΑΤΩΝΟΣ ΣΥΜΠΟΣΙΟΝ', 'ΠΡΟΣΩΠΑ ΤΟΥ ΔΙΑΛΟΓΟΥ'], [3, 4], 100),
+    sec(['***'], [4], 14000),
+    sec(['ΕΓΚΩΜΙΟΝ ΕΡΩΤΟΣ ΤΟΥ ΦΑΙΔΡΟΥ'], [4], 5600),
+  ]
+  const kept = dropEditorialMatter(book).map((s) => s.titles[0])
+  check('the introduction goes with all its sub-sections, up to the next heading as prominent', kept.join('|') === 'ΠΛΑΤΩΝ|ΠΛΑΤΩΝΟΣ ΣΥΜΠΟΣΙΟΝ|***|ΕΓΚΩΜΙΟΝ ΕΡΩΤΟΣ ΤΟΥ ΦΑΙΔΡΟΥ', kept.join('|'))
+  const chapter = [sec(['CHAPTER 1', 'Introduction'], [2, 3], 5000), sec(['CHAPTER 2'], [2], 5000), sec(['CHAPTER 3'], [2], 5000)]
+  check('"CHAPTER 1 / Introduction" is a chapter, kept', dropEditorialMatter(chapter).length === 3)
+  const huge = [sec(['Introduction'], [1], 90000), sec(['Notes'], [1], 1000)]
+  check('a "part" that would be most of the book is kept', dropEditorialMatter(huge)[0].titles[0] === 'Introduction')
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# Greek: numerals and question marks')
+{
+  check("ΒΙΒΛΙΟΝ Α'. is book 1", sectionNumber({ titles: ["ΒΙΒΛΙΟΝ Α'."] }) === 1)
+  check('ΒΙΒΛΙΟΝ ΙΒ΄ is book 12', sectionNumber({ titles: ['ΒΙΒΛΙΟΝ ΙΒ΄'] }) === 12)
+  check("French elision is still not a numeral (L'AGENT)", sectionNumber({ titles: ["L'AGENT FIX"] }) === null)
+  const s = splitSentences('Τι λέγεις; Δεν ηξεύρω. I see; you agree.')
+  check('";" after a Greek word ends a question, elsewhere it is a semicolon', s.length === 3, JSON.stringify(s))
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# chapters keep their sub-sections')
+{
+  const sec = (titles, levels, len) => ({ titles, levels, title: titles.join(' · '), text: 'x'.repeat(len), length: len, lines: [{ text: titles[0] }], kinds: levels.map((l) => 'h' + l) })
+  const book = [
+    sec(['BOOK I', 'SOCRATES - GLAUCON'], [1, 4], 1000),
+    sec(['SOCRATES - POLEMARCHUS'], [5], 8000),
+    sec(['BOOK II', 'SOCRATES - GLAUCON'], [2, 4], 4000),
+    sec(['GLAUCON'], [5], 6000),
+    sec(['BOOK III'], [2], 9000),
+    sec(['SOCRATES'], [5], 3000),
+  ]
+  const body = selectBody(book)
+  check('three books, each with its speakers merged in (BOOK I set larger than the rest)', body.length === 3 && body.map((b) => b.titles[0]).join() === 'BOOK I,BOOK II,BOOK III', body.map((b) => b.titles[0]).join())
 }
 
 // ---------------------------------------------------------------------------

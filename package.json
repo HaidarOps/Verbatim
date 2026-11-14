@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "node src/align.test.mjs && node src/scan.test.mjs && node server/rateTranslation.test.mjs && node server/scanTranslations.test.mjs",
-    "test:books": "node test/books.test.mjs"
+    "test:books": "node test/books.test.mjs && node test/plato.test.mjs"
   },
   "dependencies": {
     "epubjs": "^0.3.93",
