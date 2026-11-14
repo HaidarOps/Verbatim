@@ -1,0 +1,192 @@
+VERBATIM — FEATURE IDEAS (brainstorm notes)
+============================================
+
+Two brainstorms, kept here to continue on another machine.
+Status: part 1, section 1 (reading comfort) is built on branch
+"reading-settings" (the "Aa" menu). Everything else is ideas only.
+
+
+------------------------------------------------------------------------
+PART 1. BASIC E-BOOK READER FEATURES
+------------------------------------------------------------------------
+
+Here are the basic reader features I'd add, roughly in priority order.
+Each one notes how it fits with what's already built.
+
+1. Reading comfort (biggest gain, low effort)   [BUILT: "Aa" menu]
+- Font size − / +. epubjs can change this for every chapter at once with
+  one setting, which is the easy part. One catch: we now lay out the whole
+  book up front, so each size change re-flows every chapter. On Karamazov
+  (200+ chapters) it may pause for a moment. Highlights and underlines are
+  unaffected, because they're tied to paragraphs and character positions,
+  not screen positions.
+- Font choice: serif, sans-serif or the book's own font. This is the same
+  mechanism as font size.
+- Line spacing and margins: a small "Aa" menu holding all four settings is
+  the usual pattern.
+- Theme: light, sepia, dark. epubjs supports this directly. The highlight
+  colours would need checking in dark mode: the red and blue underlines are
+  fine, but the pale yellow "picked" fill would need a darker variant.
+- Remember settings in the browser, so the reader opens the way you left it.
+
+2. Not losing your place
+- Resume where you left off for each book. epubjs gives a location marker
+  for the current position. In parallel view, saving the left pane's
+  position is enough, since the right pane can follow through the alignment.
+- Progress: a "Chapter 12 of 95 · 34%" line or a thin progress bar.
+- Table of contents: a side drawer that lists the chapters and jumps to
+  one. epubjs reads the book's own contents list. In parallel view, jumping
+  one pane could also jump the other to the matching chapter, since we
+  already know which chapters pair up.
+
+3. Moving around
+- Search in the book: find a word and step through the matches. It can
+  reuse the code that already reads the book text for alignment.
+- Keyboard shortcuts: Page Up/Down, Home/End, and a key for parallel view.
+- Synchronised scrolling (a toggle) is the parallel-reader version of "turn
+  page". Scroll one side and the other follows to the matching sentence.
+  All the pieces exist already (the alignment and the "scroll to
+  counterpart" code); it would just run continuously instead of only on
+  selection. I think this is the single most valuable addition for this app.
+
+4. Notes and saving
+- Bookmarks.
+- Your own highlights and notes: a fourth highlight colour alongside
+  picked, match and the underlines, saved per book.
+- Saved ratings: keep "Rate this translation" results with the sentence,
+  so you can build a list of problem passages.
+
+5. Library
+- Book cards on the main menu with cover, title, both languages and a
+  progress bar, instead of plain links. epubjs can read cover images and
+  title data.
+- Remove an imported book. Right now imports only add.
+- Imports that survive a refresh: imported pairs currently live only in
+  that browser tab.
+
+What I'd do first: font size, theme and line spacing in one "Aa" menu,
+plus resume-where-you-left-off. These are small, self-contained, and
+they're what people notice missing straight away. After that, synchronised
+scrolling, because no ordinary reader has it and it builds on what
+Verbatim already does.
+
+Two questions that shape the design:
+1. Linked or separate settings? Should font size apply to both panes
+   together, or to each pane separately? Linked is simpler and keeps the
+   sides lined up. Separate helps if one language uses a script (e.g.
+   Greek) that reads better larger.
+   (Built as: linked, both panes together.)
+2. Device or account? Should settings and reading position be saved just
+   on this device (browser storage, no setup), or do you want them to
+   follow you across devices later (needs a small server-side store)?
+   (Built as: this device, browser storage.)
+
+
+------------------------------------------------------------------------
+PART 2. JUDGING A TRANSLATION WITH ONLY ONE BOOK
+(e.g. just the English translation, no original)
+------------------------------------------------------------------------
+
+The honest starting point: without the original, nothing can measure
+faithfulness directly. "How well was this translated?" is always a
+comparison against something. So the real question is what you compare
+against when you only hold the English. I see six angles, from most
+reliable to most speculative.
+
+1. Find the original yourself, so one book becomes two.
+Most of the books you'd ask this about are classics, and their originals
+are usually free: Gutenberg, Wikisource and Perseus (for Greek and Latin)
+between them cover a lot. The epub already carries the title, author and
+often the translator's name. Verbatim could look up the original-language
+edition and download it. From there, everything you've already built
+applies: alignment, highlighting, ChatGPT scoring. This gives a real
+answer, not a guess, which is why I'd do it first. It mostly fails for
+modern books whose original is still under copyright.
+
+2. Compare with other translations of the same book.
+This one is quietly powerful. Line up two or three English translations of
+the same book against each other. Where every translator says roughly the
+same thing, the meaning is almost certainly the author's. Where they split
+apart, you've found the spots where the original was hard: wordplay,
+ambiguity, cultural references, tone. Those are exactly the spots where
+the translator's own reading has entered. You don't need to read the
+original language for this. Aligning English with English is also easier
+than English with Greek, because the lengths match closely. Classics often
+have a free older translation (Garnett, Jowett) alongside the modern ones
+you'd own.
+
+3. Ask a model what the original language does here, not what the
+original text says.
+A model can't reliably recall the exact Russian sentence; if pushed, it
+will make one up. But it knows a lot about how Russian, Greek or French
+differ from English. So you ask it to explain where English is forced to
+lose or choose, for example:
+- Russian "ty" and "vy", which mark intimacy or insult and vanish in
+  English "you";
+- Greek "eros", "philia" and "agape", which all become "love";
+- verb aspect;
+- grammatical gender;
+- names that carry meaning (Karamazov contains "kara", "black";
+  Raskolnikov contains "raskol", "schism");
+- puns that can't survive.
+This is grounded in how the languages work rather than in remembered
+text, so it stays reliable. In the reader it would look like a note on a
+passage: "Here the original probably used X; English can't keep Y."
+
+4. Read the translation for signs of the translator's own hand.
+Translation leaves marks in the English itself, and you can look for them
+with only one book:
+- Additions: short explanations a native reader wouldn't need ("the kvass,
+  a fermented drink, …"). These are usually the translator talking, not
+  the author.
+- Softening: rough, repetitive or odd original style smoothed into
+  polished English. Repetitions disappear and slang becomes neutral.
+- Domesticating: foreign idioms swapped for English ones ("raining cats
+  and dogs" in a Russian novel is certainly not Dostoevsky).
+- Words left untranslated or in italics: the translator signalling
+  something they couldn't carry over.
+- Footnotes and brackets: explicit evidence of the translator stepping in.
+  Ironically, we now strip these out for alignment, but for this feature
+  they're gold.
+A cheap model can flag these sentence by sentence, the same way as the
+current scan, and say why. Note that this measures how much the
+translator shows, not whether they're accurate.
+
+5. The translator's voice across their books.
+This is the more research-flavoured idea. Constance Garnett translated
+Dostoevsky, Tolstoy, Chekhov and Turgenev, and readers famously say they
+all sound alike. With several books by one translator, you can measure the
+style features that stay the same whatever the author: sentence rhythm,
+favourite words, punctuation habits. Those features are the translator's
+voice. Then in any one book you can mark passages that are typically
+"Garnett" rather than typically "Dostoevsky". It needs more books, but it
+answers the question "how much of this is not the author's take" more
+directly than anything else here.
+
+6. Use the introduction we just removed.
+Translators' prefaces often explain their hardest choices ("I have
+rendered 'toska' as 'anguish', though…"). A model could read the
+introduction, pull out every mention of a specific word or passage, and
+attach it as a note where that word appears in the text. It's the
+translator's own account of their choices, so it's honest evidence.
+
+How I'd put it together. Each note would say which kind of evidence it
+rests on, so you always know how much to trust it:
+- Checked against the original: angle 1 found it, so it's as reliable as
+  the current alignment.
+- Translators disagree here: angle 2. It's factual, but it shows where
+  interpretation happened, not which reading is right.
+- The language forces a loss here: angle 3. It's general knowledge, not a
+  claim about this exact sentence.
+- Sounds like the translator's addition: angles 4 and 6. It's a
+  judgement, so it should be worded as one.
+
+Cost works the same as today. A cheap whole-book pass flags candidates,
+and the expensive explanation runs only when you click a sentence.
+
+Questions still open:
+1. Which books? Mostly classics, where angle 1 is easy, or modern novels,
+   where you'd rely on angles 2–4?
+2. Which question? Do you want "was this sentence accurate?", which needs
+   the original, or "what am I missing here?", which angles 3, 4 and 6 can
+   answer on their own? They lead to quite different features.

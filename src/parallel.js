@@ -17,6 +17,13 @@ import { blockKey, leafBlocks } from './chapters.js'
 
 const PICKED_COLOR = 'rgba(255, 190, 0, 0.45)' // what you selected
 const MATCH_COLOR = 'rgba(70, 150, 255, 0.35)' // its counterpart
+// The same fills on a dark page (reading theme "Dark", see readingSettings.js),
+// by highlight name: stronger, so they still stand out behind light text.
+export const DARK_HIGHLIGHT_FILLS = {
+  'xh-picked': 'rgba(255, 176, 0, 0.42)',
+  'xh-match': 'rgba(80, 150, 255, 0.45)',
+  'xh-hover': 'rgba(170, 200, 240, 0.22)',
+}
 const OTHER = { src: 'tgt', tgt: 'src' }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@ import { createCrossHighlighter, createLinker, GC_UNDERLINE, SCAN_UNDERLINE } fr
 import { scanLevel } from './scan.js'
 import ScanPanel from './ScanPanel.jsx'
 import RatingPopup from './RatingPopup.jsx'
+import ReadingMenu from './ReadingMenu.jsx'
+import { applyToDocument, keepPlace, loadSettings, readerVars, saveSettings } from './readingSettings.js'
 
 // Pre-select the first matched section with real body text on both sides, so
 // the panel opens on the first chapter rather than a title page.
@@ -28,15 +30,71 @@ function defaultSection(pairs) {
 // longer initial load. Large but finite — Infinity would poison the arithmetic.
 const FULL_BOOK_OFFSET = 1e9
 
+// Many Project Gutenberg books ship "a:hover { color: red }". They wrap whole
+// paragraphs in <a id="…"> anchors, so moving the mouse over the text turned
+// entire paragraphs red. Hovering is how this reader shows its own
+// underlines, so the book's hover styles are removed: every rule whose selector
+// uses :hover, from each stylesheet as it loads. Links look as they always did.
+function removeHoverStyles(doc) {
+  if (!doc) return
+  const strip = (sheet) => {
+    let rules
+    try {
+      rules = sheet.cssRules
+    } catch {
+      return // not readable (another origin); epubjs serves books from blob: URLs, so this is rare
+    }
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const rule = rules[i]
+      if (rule.cssRules && !rule.selectorText) strip(rule) // @media blocks
+      else if (rule.selectorText && rule.selectorText.includes(':hover')) sheet.deleteRule(i)
+    }
+  }
+  const stripAll = () => {
+    for (const sheet of doc.styleSheets) strip(sheet)
+  }
+  stripAll()
+  // Stylesheets still loading (an existing link.sheet may still be empty) are
+  // handled again when each one, and the whole chapter, finishes loading.
+  for (const link of doc.querySelectorAll('link[rel~="stylesheet"]')) {
+    link.addEventListener('load', stripAll, { once: true })
+  }
+  doc.defaultView?.addEventListener('load', stripAll, { once: true })
+}
+
+// Reading settings (readingSettings.js) shared by every open book, remembered
+// in this browser. Returns [settings, setSettings].
+function useReadingSettings() {
+  const [settings, setSettings] = useState(loadSettings)
+  useEffect(() => saveSettings(settings), [settings])
+  return [settings, setSettings]
+}
+
 // Renders one epub into its own scroll box. When `watchResize` is set, it
 // reflows as the box width changes (used by the single-book zoom view).
 // `onRendition` receives the epubjs rendition once created (null on teardown).
-function EpubPane({ url, className, watchResize, onRendition }) {
+// `settings` (readingSettings.js) are applied to every chapter, keeping the
+// reader's place when they change.
+function EpubPane({ url, className, watchResize, onRendition, settings }) {
   const ref = useRef(null)
+  const renditionRef = useRef(null)
   const onRenditionRef = useRef(onRendition)
   useEffect(() => {
     onRenditionRef.current = onRendition
   }, [onRendition])
+  // Read by the chapter hook, so chapters rendered later get the latest settings.
+  const settingsRef = useRef(settings)
+
+  useEffect(() => {
+    settingsRef.current = settings
+    const rendition = renditionRef.current
+    if (!rendition) return
+    const contents = rendition.getContents()
+    if (contents.length === 0) return
+    keepPlace(ref.current, () => {
+      for (const c of contents) applyToDocument(c.document, settings)
+    })
+  }, [settings])
 
   useEffect(() => {
     if (!ref.current) return
@@ -50,6 +108,11 @@ function EpubPane({ url, className, watchResize, onRendition }) {
       manager: 'continuous',
       offset: FULL_BOOK_OFFSET, // render the whole book up front, no lazy scroll-loading
     })
+    rendition.hooks.content.register((contents) => {
+      removeHoverStyles(contents.document)
+      if (settingsRef.current) applyToDocument(contents.document, settingsRef.current)
+    })
+    renditionRef.current = rendition
     onRenditionRef.current?.(rendition)
     rendition.display()
 
@@ -76,6 +139,7 @@ function EpubPane({ url, className, watchResize, onRendition }) {
     return () => {
       observer?.disconnect()
       if (rafId) cancelAnimationFrame(rafId)
+      renditionRef.current = null
       onRenditionRef.current?.(null)
       rendition.destroy()
       epub.destroy()
@@ -205,6 +269,7 @@ function CompareReader({ book }) {
   // Parallel view on: both books side by side. Off: only the English book
   // (both stay mounted so cross-highlighting keeps working; one is just hidden).
   const [parallel, setParallel] = useState(true)
+  const [reading, setReading] = useReadingSettings()
   const [status, setStatus] = useState('')
   // The passage popup: from a selection (onLink) or a click on a flagged,
   // underlined passage (onIssue, which adds scanKey/scanLevel).
@@ -268,8 +333,9 @@ function CompareReader({ book }) {
   if (!note && error) note = error
 
   return (
-    <div className="reader-compare">
+    <div className={`reader-compare theme-${reading.theme}`} style={readerVars(reading)}>
       <div className="compare-toolbar">
+        <ReadingMenu settings={reading} onChange={setReading} />
         <button
           className={`align-button${parallel ? ' active' : ''}`}
           onClick={() => setParallel((on) => !on)}
@@ -309,12 +375,14 @@ function CompareReader({ book }) {
         url={book.url}
         watchResize
         onRendition={attachSource}
+        settings={reading}
       />
       <EpubPane
         className={`epub-pane${!parallel && book.englishSide !== 'translation' ? ' pane-hidden' : ''}`}
         url={book.translationUrl}
         watchResize
         onRendition={attachTarget}
+        settings={reading}
       />
       {linked && (
         <RatingPopup
@@ -398,7 +466,20 @@ function Reader({ books }) {
   }
 
   // Single book: existing zoomable view.
-  return <EpubPane className="reader-box" url={book.url} watchResize />
+  return <SingleReader book={book} />
+}
+
+// One book on its own, with the same reading settings as the parallel view.
+function SingleReader({ book }) {
+  const [reading, setReading] = useReadingSettings()
+  return (
+    <div className={`reader-single theme-${reading.theme}`} style={readerVars(reading)}>
+      <div className="single-toolbar">
+        <ReadingMenu settings={reading} onChange={setReading} />
+      </div>
+      <EpubPane className="reader-box" url={book.url} watchResize settings={reading} />
+    </div>
+  )
 }
 
 export default Reader
