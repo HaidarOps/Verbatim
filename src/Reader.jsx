@@ -202,6 +202,9 @@ function Pair({ index, pair }) {
 function CompareReader({ book }) {
   const [showAlign, setShowAlign] = useState(false)
   const [showScan, setShowScan] = useState(false)
+  // Parallel view on: both books side by side. Off: only the English book
+  // (both stay mounted so cross-highlighting keeps working; one is just hidden).
+  const [parallel, setParallel] = useState(true)
   const [status, setStatus] = useState('')
   // The passage popup: from a selection (onLink) or a click on a flagged,
   // underlined passage (onIssue, which adds scanKey/scanLevel).
@@ -267,6 +270,14 @@ function CompareReader({ book }) {
   return (
     <div className="reader-compare">
       <div className="compare-toolbar">
+        <button
+          className={`align-button${parallel ? ' active' : ''}`}
+          onClick={() => setParallel((on) => !on)}
+          aria-pressed={parallel}
+          title="Show both books side by side, or only the English book"
+        >
+          Parallel view
+        </button>
         <button className="align-button" onClick={() => setShowAlign(true)}>
           Align
         </button>
@@ -293,8 +304,18 @@ function CompareReader({ book }) {
       </div>
       {note && <div className="compare-status">{note}</div>}
       {(heat || scanView) && <HeatLegend gc={heat} scan={scanView} />}
-      <EpubPane className="epub-pane" url={book.url} onRendition={attachSource} />
-      <EpubPane className="epub-pane" url={book.translationUrl} onRendition={attachTarget} />
+      <EpubPane
+        className={`epub-pane${!parallel && book.englishSide === 'translation' ? ' pane-hidden' : ''}`}
+        url={book.url}
+        watchResize
+        onRendition={attachSource}
+      />
+      <EpubPane
+        className={`epub-pane${!parallel && book.englishSide !== 'translation' ? ' pane-hidden' : ''}`}
+        url={book.translationUrl}
+        watchResize
+        onRendition={attachTarget}
+      />
       {linked && (
         <RatingPopup
           key={linked.id}
