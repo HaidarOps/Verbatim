@@ -75,39 +75,56 @@ function RatingPopup({ original, translation, anchor, gc, scan, onClose }) {
   )
 }
 
-// How the length-based aligner saw this passage: sentences matched (e.g.
-// "1→2"), how plausible the length ratio is, and its flag, if any.
-const GC_VERDICT = {
-  unmatched: 'no counterpart',
-  mismatch: 'length mismatch',
-  loose: 'unusual length',
+// Plain-language explanation of the quick length check (Gale–Church): it only
+// compares how long each passage is against its translation — translations are
+// usually a predictable length, so an odd one is worth a look. It reads no
+// meaning, so this is a hint, not a verdict.
+const GC_EXPLAIN = {
+  unmatched:
+    'We couldn’t find a matching passage for this in the other book, so it may have been added or left out in translation.',
+  mismatch:
+    'This passage is a very different length from its translation. Translations are usually close in length, so a big difference can mean something was added, dropped, or changed.',
+  loose:
+    'This passage is a slightly unusual length next to its translation — probably fine, but worth a second look.',
 }
+
+// A merged or split passage, in plain words (nothing for a plain 1-to-1).
+function shapeNote(shapes) {
+  if (shapes.length !== 1) return null
+  const [s, t] = shapes[0].split('→').map(Number)
+  if (!s || !t || s === t) return null
+  return s > t
+    ? ` Here, ${s} sentences in the original become ${t} in the translation.`
+    : ` Here, ${s} sentence${s > 1 ? 's' : ''} in the original ${s > 1 ? 'become' : 'becomes'} ${t} in the translation.`
+}
+
 function GaleChurchLine({ gc }) {
-  const fit = gc.p === null ? null : gc.p >= 0.1 ? 'lengths fit' : `length fit p ≈ ${formatP(gc.p)}`
+  const text = gc.flag
+    ? GC_EXPLAIN[gc.flag]
+    : 'The two passages are about the length we’d expect, which is a good sign.'
   return (
-    <p className={`rate-gc${gc.flag ? ` flag-${gc.flag}` : ''}`}>
-      Gale–Church: {gc.shapes.join(', ')} sentences
-      {fit && ` · ${fit}`}
-      {gc.flag && ` · ${GC_VERDICT[gc.flag]}`}
+    <p className={`rate-why rate-gc${gc.flag ? ` flag-${gc.flag}` : ''}`}>
+      <strong>Length check:</strong> {text}
+      {shapeNote(gc.shapes)}
     </p>
   )
 }
-function formatP(p) {
-  if (p < 0.001) return '<0.1%'
-  return `${(p * 100).toFixed(p < 0.01 ? 1 : 0)}%`
-}
 
-// The whole-book ChatGPT scan's stored verdict for this passage (score + the
-// short reason it gave), shown when you click a blue-underlined passage.
+// Plain-language version of the ChatGPT scan's stored verdict: unlike the
+// length check, ChatGPT actually reads both passages. Shows its verdict, the
+// score, and the short reason it gave.
+const SCAN_VERDICT = {
+  not_matching: 'reading both passages, these don’t look like translations of each other.',
+  bad: 'reading both passages, this is a weak translation',
+  weak: 'reading both passages, this translation is okay but has problems',
+}
 function ScanLine({ scan }) {
-  const label =
-    scan.level === 'not_matching'
-      ? 'not a translation of each other'
-      : `score ${scan.score ?? '?'} / 10`
+  const verdict = SCAN_VERDICT[scan.level] || 'reviewed this translation'
+  const withScore = scan.level === 'not_matching' ? verdict : `${verdict} (scored ${scan.score ?? '?'} out of 10).`
   return (
-    <p className={`rate-scan level-${scan.level}`}>
-      ChatGPT: {label}
-      {scan.issue ? ` · ${scan.issue}` : ''}
+    <p className={`rate-why rate-scan level-${scan.level}`}>
+      <strong>ChatGPT:</strong> {withScore}
+      {scan.issue ? ` It noted: “${scan.issue}”` : ''}
     </p>
   )
 }

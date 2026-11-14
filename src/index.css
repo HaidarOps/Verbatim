@@ -203,27 +203,24 @@ a {
   vertical-align: middle;
 }
 
-/* Gale–Church line in the rating popup. */
+/* Plain-language "why this is flagged" lines in the rating popup. */
+.rate-why {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.rate-why strong {
+  font-weight: 600;
+}
 .rate-gc {
-  margin: 0 0 10px;
-  font-size: 12px;
-  opacity: 0.75;
+  color: #3a3a3a;
 }
 .rate-gc.flag-unmatched,
 .rate-gc.flag-mismatch {
   color: #b00020;
-  opacity: 1;
 }
-
-/* ChatGPT scan line in the rating popup. */
 .rate-scan {
-  margin: 0 0 10px;
-  font-size: 12px;
   color: #0a49d6;
-}
-.rate-scan.level-not_matching,
-.rate-scan.level-bad {
-  font-weight: 600;
 }
 
 /* Alignment modal */
