@@ -18,6 +18,16 @@ function defaultSection(pairs) {
   return i === -1 ? 0 : i
 }
 
+// epubjs's continuous manager lazy-loads: it only renders the sections near the
+// viewport and appends/trims more as you scroll. Its `offset` setting is the
+// pixel margin it keeps rendered around the viewport — both for deciding when to
+// append the next section (manager.check) and for deciding which sections stay
+// mounted (manager.update / isVisible). Setting it enormous makes it render the
+// ENTIRE book up front and never trim it, so the whole thing is immediately
+// scrollable (and fully present for cross-book highlighting) at the cost of a
+// longer initial load. Large but finite — Infinity would poison the arithmetic.
+const FULL_BOOK_OFFSET = 1e9
+
 // Renders one epub into its own scroll box. When `watchResize` is set, it
 // reflows as the box width changes (used by the single-book zoom view).
 // `onRendition` receives the epubjs rendition once created (null on teardown).
@@ -38,6 +48,7 @@ function EpubPane({ url, className, watchResize, onRendition }) {
       height: '100%',
       flow: 'scrolled-doc',
       manager: 'continuous',
+      offset: FULL_BOOK_OFFSET, // render the whole book up front, no lazy scroll-loading
     })
     onRenditionRef.current?.(rendition)
     rendition.display()
