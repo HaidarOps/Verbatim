@@ -7,7 +7,7 @@ const MARGIN = 12
 // passage and its aligned translation to /api/rate-translation (ChatGPT, via
 // the dev server; see server/rateTranslation.js) and shows the 1-10 score and
 // the reasons. Mount it with a new `key` per selection to reset it.
-function RatingPopup({ original, translation, anchor, gc, onClose }) {
+function RatingPopup({ original, translation, anchor, gc, scan, onClose }) {
   const [state, setState] = useState({ phase: 'idle' }) // idle | loading | done | error
   const abortRef = useRef(null)
 
@@ -54,6 +54,7 @@ function RatingPopup({ original, translation, anchor, gc, onClose }) {
       </div>
 
       {gc && <GaleChurchLine gc={gc} />}
+      {scan && <ScanLine scan={scan} />}
 
       {state.phase === 'idle' && (
         <button className="rate-button" onClick={rate}>
@@ -94,6 +95,21 @@ function GaleChurchLine({ gc }) {
 function formatP(p) {
   if (p < 0.001) return '<0.1%'
   return `${(p * 100).toFixed(p < 0.01 ? 1 : 0)}%`
+}
+
+// The whole-book ChatGPT scan's stored verdict for this passage (score + the
+// short reason it gave), shown when you click a blue-underlined passage.
+function ScanLine({ scan }) {
+  const label =
+    scan.level === 'not_matching'
+      ? 'not a translation of each other'
+      : `score ${scan.score ?? '?'} / 10`
+  return (
+    <p className={`rate-scan level-${scan.level}`}>
+      ChatGPT: {label}
+      {scan.issue ? ` · ${scan.issue}` : ''}
+    </p>
+  )
 }
 
 function RatingResult({ rating }) {

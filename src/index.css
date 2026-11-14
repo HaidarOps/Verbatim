@@ -195,10 +195,12 @@ a {
   white-space: nowrap;
 }
 
+/* A short underline in the flagged passage's colour (matches the text). */
 .heat-swatch {
-  width: 14px;
-  height: 14px;
-  border: 1px solid rgba(0, 0, 0, 0.25);
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  vertical-align: middle;
 }
 
 /* Gale–Church line in the rating popup. */
@@ -211,6 +213,17 @@ a {
 .rate-gc.flag-mismatch {
   color: #b00020;
   opacity: 1;
+}
+
+/* ChatGPT scan line in the rating popup. */
+.rate-scan {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #0a49d6;
+}
+.rate-scan.level-not_matching,
+.rate-scan.level-bad {
+  font-weight: 600;
 }
 
 /* Alignment modal */
