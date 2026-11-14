@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import ePub from 'epubjs'
 import { loadSections } from './chapters.js'
 import { alignSections, alignTexts, firstMatchedPairs } from './align.js'
-import { createCrossHighlighter, createLinker, HEAT_COLORS, SCAN_COLORS } from './parallel.js'
+import { createCrossHighlighter, createLinker, GC_UNDERLINE, SCAN_UNDERLINE } from './parallel.js'
 import { scanLevel } from './scan.js'
 import ScanPanel from './ScanPanel.jsx'
 import RatingPopup from './RatingPopup.jsx'
@@ -203,7 +203,9 @@ function CompareReader({ book }) {
   const [showAlign, setShowAlign] = useState(false)
   const [showScan, setShowScan] = useState(false)
   const [status, setStatus] = useState('')
-  const [linked, setLinked] = useState(null) // { id, original, translation, anchor, gc }
+  // The passage popup: from a selection (onLink) or a click on a flagged,
+  // underlined passage (onIssue, which adds scanKey/scanLevel).
+  const [linked, setLinked] = useState(null)
   const { sections, error } = useParallelBooks(book.url, book.translationUrl)
   const linker = useMemo(() => (sections ? createLinker(sections) : null), [sections])
 
@@ -211,6 +213,7 @@ function CompareReader({ book }) {
     createCrossHighlighter({
       onStatus: setStatus,
       onLink: (match) => setLinked(match && { ...match, id: Date.now() }),
+      onIssue: (issue) => setLinked(issue && { ...issue, id: Date.now() }),
     }),
   )
   const closePopup = useCallback(() => setLinked(null), [])
@@ -271,7 +274,7 @@ function CompareReader({ book }) {
           className={`align-button${heat ? ' active' : ''}`}
           onClick={() => setHeat((on) => !on)}
           aria-pressed={heat}
-          title="Tint the sentences Gale–Church finds suspicious"
+          title="Underline the sentences Gale–Church finds suspicious — hover and click one to see why"
         >
           Gale–Church view
         </button>
@@ -283,7 +286,7 @@ function CompareReader({ book }) {
           onClick={() => setScanView((on) => !on)}
           aria-pressed={scanView}
           disabled={scanCount === 0}
-          title={scanCount ? 'Tint the passages ChatGPT scored low' : 'Run a ChatGPT scan first'}
+          title={scanCount ? 'Underline the passages ChatGPT scored low — hover and click one to see why' : 'Run a ChatGPT scan first'}
         >
           ChatGPT view
         </button>
@@ -299,6 +302,11 @@ function CompareReader({ book }) {
           translation={linked.translation}
           anchor={linked.anchor}
           gc={linked.gc}
+          scan={
+            linked.scanLevel
+              ? { level: linked.scanLevel, ...(scan.results[linked.scanKey] || {}) }
+              : null
+          }
           onClose={closePopup}
         />
       )}
@@ -340,14 +348,14 @@ const SCAN_LABELS = {
 }
 function HeatLegend({ gc, scan }) {
   const items = [
-    ...(gc ? Object.entries(HEAT_LABELS).map(([level, label]) => [label, HEAT_COLORS[level]]) : []),
-    ...(scan ? Object.entries(SCAN_LABELS).map(([level, label]) => [label, SCAN_COLORS[level]]) : []),
+    ...(gc ? Object.entries(HEAT_LABELS).map(([level, label]) => [label, GC_UNDERLINE[level][0]]) : []),
+    ...(scan ? Object.entries(SCAN_LABELS).map(([level, label]) => [label, SCAN_UNDERLINE[level][0]]) : []),
   ]
   return (
     <div className="heat-legend">
       {items.map(([label, color]) => (
         <span key={label} className="heat-item">
-          <span className="heat-swatch" style={{ background: color }} />
+          <span className="heat-swatch" style={{ borderBottom: `3px solid ${color}` }} />
           {label}
         </span>
       ))}

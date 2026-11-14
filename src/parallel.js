@@ -123,6 +123,27 @@ export function createLinker(pairs) {
     return out
   }
 
+  // The flagged bead covering (spine, block ord, char offset) on `side`, or
+  // null. `classifiers` is { gc, scan } — a classify(bead, info) for each
+  // active view (null when off). Used for hover + click on an underlined
+  // passage. Beads partition the text, so the first covering bead is the one.
+  function issueAt(side, spine, ord, offset, classifiers) {
+    for (const pair of pairsBySpine[side].get(spine) || []) {
+      for (const bead of alignmentFor(pair).beads) {
+        const info = describe(pair, bead)
+        const covers = info[side].some(
+          (p) => p.spine === spine && p.ord === ord && offset >= p.start && offset < p.end,
+        )
+        if (!covers) continue
+        const gcLevel = classifiers.gc ? classifiers.gc(bead, info) : null
+        const scanLevel = classifiers.scan ? classifiers.scan(bead, info) : null
+        if (!gcLevel && !scanLevel) return null
+        return { bead, info, pieces: info[side].filter((p) => p.spine === spine), gcLevel, scanLevel }
+      }
+    }
+    return null
+  }
+
   // Every bead in the book, in reading order:
   // [{ key, original, translation, src, tgt, gcFlag, gcP, section }].
   // Aligning a long book takes a few seconds, so this yields to the page
@@ -139,7 +160,7 @@ export function createLinker(pairs) {
     return out
   }
 
-  return { link, heat, allBeads }
+  return { link, heat, allBeads, issueAt }
 }
 
 // A short, stable key for a passage pair's text (53-bit cyrb53 hash), used to
@@ -245,10 +266,11 @@ function piecesToRanges(doc, spine, pieces) {
 // Painting
 // ---------------------------------------------------------------------------
 
-// Paint `pieces` in one rendered chapter as the named highlight. Higher
-// `priority` draws on top where highlights overlap. Returns the first
-// painted { range, contents }, or null.
-function paintHighlight(contents, name, color, priority, pieces) {
+// Paint `pieces` in one rendered chapter as the named highlight, styled by the
+// CSS declaration `decl` (a background fill for selections, an underline for
+// flagged passages). Higher `priority` draws on top where highlights overlap.
+// Returns the first painted { range, contents }, or null.
+function paintHighlight(contents, name, decl, priority, pieces) {
   const win = contents.window
   if (!win || !win.CSS || !win.CSS.highlights || typeof win.Highlight !== 'function') return null
   const doc = contents.document
@@ -256,7 +278,7 @@ function paintHighlight(contents, name, color, priority, pieces) {
   if (!doc.getElementById(styleId) && doc.head) {
     const style = doc.createElement('style')
     style.id = styleId
-    style.textContent = `::highlight(${name}) { background-color: ${color}; }`
+    style.textContent = `::highlight(${name}) { ${decl} }`
     doc.head.appendChild(style)
   }
   const ranges = piecesToRanges(doc, contents.sectionIndex, pieces)
@@ -270,20 +292,25 @@ function paintHighlight(contents, name, color, priority, pieces) {
   return { range: ranges[0], contents }
 }
 
-// One named highlight in one rendition. set() paints the pieces in every
+const fill = (color) => `background-color: ${color};`
+const underline = (color, thickness) =>
+  `text-decoration-line: underline; text-decoration-color: ${color};` +
+  ` text-decoration-thickness: ${thickness}px; text-underline-offset: 2px;`
+
+// One background highlight in one rendition. set() paints the pieces in every
 // rendered chapter and returns the first painted { range, contents }.
 function createPainter(rendition, name, color, priority) {
   let pieces = []
   // Re-apply when epubjs renders (or re-renders) a chapter.
   rendition.hooks.content.register((contents) => {
-    if (pieces.length) paintHighlight(contents, name, color, priority, pieces)
+    if (pieces.length) paintHighlight(contents, name, fill(color), priority, pieces)
   })
   return {
     set(next) {
       pieces = next
       let first = null
       for (const contents of rendition.getContents()) {
-        const hit = paintHighlight(contents, name, color, priority, pieces)
+        const hit = paintHighlight(contents, name, fill(color), priority, pieces)
         if (hit && !first) first = hit
       }
       return first
@@ -296,23 +323,29 @@ function createPainter(rendition, name, color, priority) {
 // so a long book costs nothing up front. Two maps exist:
 //   Gale–Church — beadFlag (align.js): length-based suspicion
 //   ChatGPT     — scanLevel (scan.js): the cheap model's whole-book scan
-export const HEAT_COLORS = {
-  unmatched: 'rgba(220, 0, 0, 0.38)', // no counterpart: omitted or added
-  mismatch: 'rgba(220, 0, 0, 0.22)', // length fit p < 1%
-  loose: 'rgba(220, 0, 0, 0.10)', // length fit p < 5%
+// Underline styles for flagged passages (they replace the old background tint):
+// red for Gale–Church, blue for the ChatGPT scan, thicker and stronger the
+// worse the passage. [color, thickness]. Keys are beadFlag / scanLevel levels.
+export const GC_UNDERLINE = {
+  unmatched: ['rgba(220, 0, 0, 0.95)', 3], // no counterpart: omitted or added
+  mismatch: ['rgba(220, 0, 0, 0.85)', 2], // length fit p < 1%
+  loose: ['rgba(221, 45, 45, 0.55)', 1.5], // length fit p < 5%
 }
-export const SCAN_COLORS = {
-  not_matching: 'rgba(130, 0, 200, 0.30)', // ChatGPT: the pair isn't a translation of each other
-  bad: 'rgba(0, 90, 255, 0.32)', // ChatGPT score 1-3
-  weak: 'rgba(0, 90, 255, 0.14)', // ChatGPT score 4-5
+export const SCAN_UNDERLINE = {
+  not_matching: ['rgba(0, 60, 230, 0.95)', 3], // not a translation of each other
+  bad: ['rgba(0, 90, 255, 0.9)', 2.5], // ChatGPT score 1-3
+  weak: ['rgba(0, 90, 255, 0.5)', 1.5], // ChatGPT score 4-5
 }
-function createHeatPainter(rendition, side, getLinker, { prefix, colors, classify }) {
+const HOVER_FILL = 'rgba(90, 120, 160, 0.18)' // emphasis while hovering an issue
+
+function createHeatPainter(rendition, side, getLinker, { prefix, styles, classify }) {
   let enabled = false
   const paint = (contents) => {
     const linker = getLinker()
     const levels = enabled && linker ? linker.heat(side, contents.sectionIndex, classify()) : {}
-    for (const level of Object.keys(colors)) {
-      paintHighlight(contents, `${prefix}-${level}`, colors[level], 0, levels[level] || [])
+    for (const level of Object.keys(styles)) {
+      const [color, thickness] = styles[level]
+      paintHighlight(contents, `${prefix}-${level}`, underline(color, thickness), 0, levels[level] || [])
     }
   }
   rendition.hooks.content.register((contents) => {
@@ -381,6 +414,53 @@ function screenBox({ range, contents }) {
   return { left: f.left + r.left, top: f.top + r.top, bottom: f.top + r.bottom, width: r.width }
 }
 
+// A mouse event's point in the top-level page's viewport coordinates.
+function eventBox(contents, event) {
+  const frame = contents.window && contents.window.frameElement
+  if (!frame) return null
+  const f = frame.getBoundingClientRect()
+  const x = f.left + (event.clientX || 0)
+  const y = f.top + (event.clientY || 0)
+  return { left: x, top: y - 10, bottom: y + 10, width: 0 }
+}
+
+// leafBlocks() is stable per rendered document; cache it for hover hit-testing.
+const blockCache = new WeakMap()
+function leafBlocksCached(doc) {
+  let blocks = blockCache.get(doc)
+  if (!blocks) blockCache.set(doc, (blocks = leafBlocks(doc)))
+  return blocks
+}
+
+// Which block + normalised char offset a mouse event points at, as
+// { spine, ord, offset }, or null when it is not over body text.
+function locate(contents, event) {
+  const doc = contents.document
+  const x = event.clientX
+  const y = event.clientY
+  if (x == null || y == null) return null
+  let node = null
+  let offset = 0
+  if (doc.caretRangeFromPoint) {
+    const r = doc.caretRangeFromPoint(x, y)
+    if (r) {
+      node = r.startContainer
+      offset = r.startOffset
+    }
+  } else if (doc.caretPositionFromPoint) {
+    const p = doc.caretPositionFromPoint(x, y)
+    if (p) {
+      node = p.offsetNode
+      offset = p.offset
+    }
+  }
+  if (!node) return null
+  const blocks = leafBlocksCached(doc)
+  const ord = blocks.findIndex((b) => b.el.contains(node))
+  if (ord < 0) return null
+  return { spine: contents.sectionIndex, ord, offset: offsetAt(textPoints(blocks[ord].el), doc, node, offset) }
+}
+
 const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve))
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -398,7 +478,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // new selection has no match. setHeat(true) shows the Gale–Church heat map;
 // setScanView(true, classify) shows the ChatGPT scan's (see scan.js).
 // focus({ src, tgt }) highlights a pair and scrolls both panes to it.
-export function createCrossHighlighter({ onStatus, onLink } = {}) {
+export function createCrossHighlighter({ onStatus, onLink, onIssue } = {}) {
   const panes = { src: null, tgt: null }
   let linker = null
   let heatOn = false
@@ -411,6 +491,7 @@ export function createCrossHighlighter({ onStatus, onLink } = {}) {
       if (!pane) continue
       pane.picked.set([])
       pane.match.set([])
+      pane.hover?.set([])
     }
   }
 
@@ -480,17 +561,18 @@ export function createCrossHighlighter({ onStatus, onLink } = {}) {
       }
       panes[side] = {
         rendition,
-        // Selection colours sit above the heat map where they overlap.
+        // Selection colours sit above the issue underlines where they overlap.
         picked: createPainter(rendition, 'xh-picked', PICKED_COLOR, 2),
         match: createPainter(rendition, 'xh-match', MATCH_COLOR, 2),
+        hover: createPainter(rendition, 'xh-hover', HOVER_FILL, 1),
         heat: createHeatPainter(rendition, side, () => linker, {
           prefix: 'gc',
-          colors: HEAT_COLORS,
+          styles: GC_UNDERLINE,
           classify: () => beadFlag,
         }),
         scan: createHeatPainter(rendition, side, () => linker, {
           prefix: 'scan',
-          colors: SCAN_COLORS,
+          styles: SCAN_UNDERLINE,
           classify: () => scanClassify,
         }),
       }
@@ -498,6 +580,43 @@ export function createCrossHighlighter({ onStatus, onLink } = {}) {
       if (scanOn) panes[side].scan.set(true)
       const onRelease = (_event, contents) => handleSelection(side, contents)
       for (const type of ['mouseup', 'touchend', 'keyup']) rendition.on(type, onRelease)
+
+      // Hover + click on flagged (underlined) passages, only while a view is on.
+      const findIssue = (contents, event) => {
+        if (!linker || (!heatOn && !scanOn)) return null
+        const loc = locate(contents, event)
+        if (!loc) return null
+        return linker.issueAt(side, loc.spine, loc.ord, loc.offset, {
+          gc: heatOn ? beadFlag : null,
+          scan: scanOn ? scanClassify : null,
+        })
+      }
+      let hoverRaf = 0
+      let pending = null
+      rendition.on('mousemove', (event, contents) => {
+        pending = { event, contents }
+        if (hoverRaf) return
+        hoverRaf = requestAnimationFrame(() => {
+          hoverRaf = 0
+          const { event, contents } = pending
+          const issue = findIssue(contents, event)
+          const body = contents.document && contents.document.body
+          if (body) body.style.cursor = issue ? 'pointer' : ''
+          panes[side]?.hover.set(issue ? issue.pieces : [])
+        })
+      })
+      rendition.on('click', (event, contents) => {
+        const issue = findIssue(contents, event)
+        if (!issue) return
+        onIssue?.({
+          original: issue.info.original,
+          translation: issue.info.translation,
+          anchor: eventBox(contents, event),
+          gc: issue.gcLevel ? describeBeads([issue.bead]) : null,
+          scanKey: issue.scanLevel ? issue.info.key : null,
+          scanLevel: issue.scanLevel || null,
+        })
+      })
     },
     setLinker(next) {
       linker = next

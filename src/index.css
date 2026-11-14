@@ -195,22 +195,32 @@ a {
   white-space: nowrap;
 }
 
+/* A short underline in the flagged passage's colour (matches the text). */
 .heat-swatch {
-  width: 14px;
-  height: 14px;
-  border: 1px solid rgba(0, 0, 0, 0.25);
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  vertical-align: middle;
 }
 
-/* Gale–Church line in the rating popup. */
+/* Plain-language "why this is flagged" lines in the rating popup. */
+.rate-why {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.rate-why strong {
+  font-weight: 600;
+}
 .rate-gc {
-  margin: 0 0 10px;
-  font-size: 12px;
-  opacity: 0.75;
+  color: #3a3a3a;
 }
 .rate-gc.flag-unmatched,
 .rate-gc.flag-mismatch {
   color: #b00020;
-  opacity: 1;
+}
+.rate-scan {
+  color: #0a49d6;
 }
 
 /* Alignment modal */
