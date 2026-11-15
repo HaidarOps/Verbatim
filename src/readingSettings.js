@@ -12,6 +12,7 @@
 // of its own. The page colour around the text is the app's (see readerVars).
 
 import { DARK_HIGHLIGHT_FILLS } from './parallel.js'
+import { onReaderInput } from './position.js'
 
 export const FONT_SIZES = [70, 80, 90, 100, 110, 120, 135, 150, 175, 200] // percent
 export const FONTS = {
@@ -162,13 +163,13 @@ export function keepPlace(pane, change) {
   const started = performance.now()
   let stable = 0
   let raf = 0
-  const inputs = ['wheel', 'touchstart', 'pointerdown', 'keydown']
+  let unlisten = () => {}
   const stop = () => {
     cancelAnimationFrame(raf)
-    for (const type of inputs) pane.removeEventListener(type, stop, true)
+    unlisten()
     if (active.get(scroller) === stop) active.delete(scroller)
   }
-  for (const type of inputs) pane.addEventListener(type, stop, true)
+  unlisten = onReaderInput(scroller, stop)
   active.set(scroller, stop)
 
   const step = () => {

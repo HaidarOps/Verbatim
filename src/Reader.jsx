@@ -9,6 +9,8 @@ import ScanPanel from './ScanPanel.jsx'
 import RatingPopup from './RatingPopup.jsx'
 import ReadingMenu from './ReadingMenu.jsx'
 import { applyToDocument, keepPlace, loadSettings, readerVars, saveSettings } from './readingSettings.js'
+import { counterpartPlace, placeOfEntry, scrollToEntry, scrollToPlace, trackPlace } from './position.js'
+import ContentsDrawer from './ContentsDrawer.jsx'
 
 // Pre-select the first matched section with real body text on both sides, so
 // the panel opens on the first chapter rather than a title page.
@@ -70,18 +72,51 @@ function useReadingSettings() {
   return [settings, setSettings]
 }
 
+// Each pane's contents list and current entry, for the contents drawer.
+// onContents / onProgress are EpubPane's callbacks; books(sides, fallbackNames)
+// gives ContentsDrawer's `books` for the panes shown.
+function useContents() {
+  const [contents, setContents] = useState({})
+  const [current, setCurrent] = useState({})
+  const onContents = useCallback((side, info) => setContents((c) => ({ ...c, [side]: info })), [])
+  const onProgress = useCallback(
+    (side, info) => setCurrent((c) => (c[side] === info.entry ? c : { ...c, [side]: info.entry })),
+    [],
+  )
+  const books = (sides, names) =>
+    sides.map((side) => {
+      const info = contents[side]
+      const lang = info && info.language ? ` (${info.language})` : ''
+      return {
+        side,
+        name: info && info.title ? `${info.title}${lang}` : names[side],
+        entries: info ? info.entries : null,
+        current: current[side] ?? -1,
+      }
+    })
+  return { books, onContents, onProgress }
+}
+
 // Renders one epub into its own scroll box. When `watchResize` is set, it
 // reflows as the box width changes (used by the single-book zoom view).
 // `onRendition` receives the epubjs rendition once created (null on teardown).
 // `settings` (readingSettings.js) are applied to every chapter, keeping the
-// reader's place when they change.
-function EpubPane({ url, className, watchResize, onRendition, settings }) {
+// reader's place when they change. With a `bookId`, the pane reopens where
+// that book (`side`: 'src' or 'tgt') was last left and shows how far
+// through it the reader is; `onContents` / `onProgress` pass the book's
+// contents list and the current place up (see trackPlace in position.js).
+function EpubPane({ url, className, watchResize, onRendition, settings, bookId = null, side = 'src', onContents, onProgress }) {
   const ref = useRef(null)
   const renditionRef = useRef(null)
   const onRenditionRef = useRef(onRendition)
   useEffect(() => {
     onRenditionRef.current = onRendition
   }, [onRendition])
+  const [progress, setProgress] = useState(null)
+  const callbacks = useRef({ onContents, onProgress })
+  useEffect(() => {
+    callbacks.current = { onContents, onProgress }
+  }, [onContents, onProgress])
   // Read by the chapter hook, so chapters rendered later get the latest settings.
   const settingsRef = useRef(settings)
 
@@ -114,6 +149,15 @@ function EpubPane({ url, className, watchResize, onRendition, settings }) {
     })
     renditionRef.current = rendition
     onRenditionRef.current?.(rendition)
+    const stopTracking = trackPlace(rendition, {
+      bookId,
+      side,
+      onContents: (info) => callbacks.current.onContents?.(side, info),
+      onProgress: (info) => {
+        setProgress(info)
+        callbacks.current.onProgress?.(side, info)
+      },
+    })
     rendition.display()
 
     // (With FULL_BOOK_OFFSET every section is rendered up front, so the old
@@ -137,6 +181,7 @@ function EpubPane({ url, className, watchResize, onRendition, settings }) {
     }
 
     return () => {
+      stopTracking()
       observer?.disconnect()
       if (rafId) cancelAnimationFrame(rafId)
       renditionRef.current = null
@@ -144,9 +189,30 @@ function EpubPane({ url, className, watchResize, onRendition, settings }) {
       rendition.destroy()
       epub.destroy()
     }
-  }, [url, watchResize])
+  }, [url, watchResize, bookId, side])
 
-  return <div className={className} ref={ref} />
+  // The progress line sits in the pane's bottom margin. (epubjs appends its
+  // own scroll box to the same element, after this one.)
+  return (
+    <div className={className} ref={ref}>
+      {bookId && progress && <PaneProgress {...progress} />}
+    </div>
+  )
+}
+
+// "Chapter V. … · 34%" with a thin bar, at the foot of a pane.
+function PaneProgress({ percent, label }) {
+  return (
+    <div className="pane-progress" aria-label={`${percent}% read`}>
+      <div className="pane-progress-text">
+        {label && <span className="pane-progress-label">{label}</span>}
+        <span className="pane-progress-percent">{percent}%</span>
+      </div>
+      <div className="pane-progress-bar">
+        <div style={{ width: `${percent}%` }} />
+      </div>
+    </div>
+  )
 }
 
 // Opens both books and aligns them in two Gale–Church passes: first the
@@ -325,8 +391,40 @@ function CompareReader({ book }) {
     return () => clearTimeout(t)
   }, [status])
 
-  const attachSource = useCallback((r) => highlighter.attach('src', r), [highlighter])
-  const attachTarget = useCallback((r) => highlighter.attach('tgt', r), [highlighter])
+  // Each pane's rendition, for jumping from the contents drawer.
+  const renditions = useRef({ src: null, tgt: null })
+  const attachSource = useCallback(
+    (r) => {
+      renditions.current.src = r
+      highlighter.attach('src', r)
+    },
+    [highlighter],
+  )
+  const attachTarget = useCallback(
+    (r) => {
+      renditions.current.tgt = r
+      highlighter.attach('tgt', r)
+    },
+    [highlighter],
+  )
+
+  // Contents drawer: each book's contents and the entry being read in it.
+  const [showContents, setShowContents] = useState(false)
+  const { books: contentsBooks, onContents, onProgress } = useContents()
+  const shownSides = parallel ? ['src', 'tgt'] : [book.englishSide === 'translation' ? 'tgt' : 'src']
+  // Jump one book to a chapter and the other to the matching place.
+  const jumpTo = useCallback(
+    (side, entry) => {
+      const own = renditions.current[side]
+      if (!own) return
+      setShowContents(false)
+      scrollToEntry(own, entry)
+      const other = renditions.current[side === 'src' ? 'tgt' : 'src']
+      const match = other && counterpartPlace(linker, side, placeOfEntry(own, entry), own)
+      if (match) scrollToPlace(other, match)
+    },
+    [linker],
+  )
 
   let note = status
   if (!note && !sections && !error) note = 'Linking the two books…'
@@ -336,6 +434,9 @@ function CompareReader({ book }) {
     <div className={`reader-compare theme-${reading.theme}`} style={readerVars(reading)}>
       <div className="compare-toolbar">
         <ReadingMenu settings={reading} onChange={setReading} />
+        <button className="align-button" onClick={() => setShowContents(true)} title="Table of contents">
+          Contents
+        </button>
         <button
           className={`align-button${parallel ? ' active' : ''}`}
           onClick={() => setParallel((on) => !on)}
@@ -376,6 +477,10 @@ function CompareReader({ book }) {
         watchResize
         onRendition={attachSource}
         settings={reading}
+        bookId={book.id}
+        side="src"
+        onContents={onContents}
+        onProgress={onProgress}
       />
       <EpubPane
         className={`epub-pane${!parallel && book.englishSide !== 'translation' ? ' pane-hidden' : ''}`}
@@ -383,7 +488,18 @@ function CompareReader({ book }) {
         watchResize
         onRendition={attachTarget}
         settings={reading}
+        bookId={book.id}
+        side="tgt"
+        onContents={onContents}
+        onProgress={onProgress}
       />
+      {showContents && (
+        <ContentsDrawer
+          books={contentsBooks(shownSides, { src: 'Original', tgt: 'Translation' })}
+          onPick={jumpTo}
+          onClose={() => setShowContents(false)}
+        />
+      )}
       {linked && (
         <RatingPopup
           key={linked.id}
@@ -472,12 +588,38 @@ function Reader({ books }) {
 // One book on its own, with the same reading settings as the parallel view.
 function SingleReader({ book }) {
   const [reading, setReading] = useReadingSettings()
+  const rendition = useRef(null)
+  const [showContents, setShowContents] = useState(false)
+  const { books: contentsBooks, onContents, onProgress } = useContents()
   return (
     <div className={`reader-single theme-${reading.theme}`} style={readerVars(reading)}>
       <div className="single-toolbar">
+        <button className="align-button" onClick={() => setShowContents(true)} title="Table of contents">
+          Contents
+        </button>
         <ReadingMenu settings={reading} onChange={setReading} />
       </div>
-      <EpubPane className="reader-box" url={book.url} watchResize settings={reading} />
+      <EpubPane
+        className="reader-box"
+        url={book.url}
+        watchResize
+        settings={reading}
+        onRendition={(r) => (rendition.current = r)}
+        bookId={book.id}
+        side="src"
+        onContents={onContents}
+        onProgress={onProgress}
+      />
+      {showContents && (
+        <ContentsDrawer
+          books={contentsBooks(['src'], { src: 'Book' })}
+          onPick={(_side, entry) => {
+            setShowContents(false)
+            if (rendition.current) scrollToEntry(rendition.current, entry)
+          }}
+          onClose={() => setShowContents(false)}
+        />
+      )}
     </div>
   )
 }
