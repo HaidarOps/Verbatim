@@ -881,3 +881,42 @@ a {
   color: #555;
   border-top: 1px solid #ddd;
 }
+
+/* Home page feedback box */
+.feedback {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 32px;
+  max-width: 480px;
+}
+
+.feedback h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.feedback textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  font: inherit;
+  resize: vertical;
+}
+
+.feedback-note {
+  font-size: 0.9rem;
+}
+
+/* Fixed button, bottom-left of the home page, linking to the feedback page */
+.feedback-button {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  padding: 6px 18px;
+  border: 1px solid #000;
+  background: #fff;
+  color: #000;
+  text-decoration: none;
+}

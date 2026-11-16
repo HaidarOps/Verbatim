@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Home from './Home.jsx'
+import Feedback from './Feedback.jsx'
 import Reader from './Reader.jsx'
 import ZoomHandles from './ZoomHandles.jsx'
 
@@ -69,6 +70,7 @@ function App() {
             />
           }
         />
+        <Route path="/feedback" element={<Feedback />} />
         <Route path="/book/:id" element={<Reader books={books} />} />
       </Routes>
     </>

@@ -1,6 +1,7 @@
 import path from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, loadEnv } from 'vite'
+import { feedbackMiddleware } from './server/feedback.js'
 import { rateTranslationMiddleware } from './server/rateTranslation.js'
 import { createScanStore, scanMiddleware } from './server/scanTranslations.js'
 
@@ -27,6 +28,7 @@ function openAiEndpoints(env) {
   const mount = (server) => {
     server.middlewares.use('/api/rate-translation', rate)
     server.middlewares.use('/api/scan', scan)
+    server.middlewares.use('/api/feedback', feedbackMiddleware(path.resolve('feedback')))
   }
   return { name: 'openai-endpoints', configureServer: mount, configurePreviewServer: mount }
 }

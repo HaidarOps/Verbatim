@@ -53,6 +53,10 @@ function Home({ books, onAdd, onAddTranslation }) {
           </li>
         ))}
       </ul>
+
+      <Link className="feedback-button" to="/feedback">
+        Feedback
+      </Link>
     </main>
   )
 }
