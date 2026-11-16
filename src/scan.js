@@ -61,7 +61,12 @@ export function estimateTokens(items) {
 // Scan `items` (from scannable()) not yet in `known` results. Calls
 // onProgress({ done, total, failed, results, usage, error }) after each batch.
 // Stops early on abort, or after 3 failures in a row (e.g. no API key).
-export async function runScan(items, { book, known = {}, fetchImpl = fetch, concurrency = 3, signal, onProgress }) {
+// `endpoint` and `mapPair` are overridable so the same batching/concurrency/
+// caching drives the strong-model verification of flagged passages too (see
+// runVerify in src/issues.js), which posts to /api/verify and carries each
+// pair's Gale–Church flag.
+const defaultMapPair = ({ key, original, translation }) => ({ key, original, translation })
+export async function runScan(items, { book, known = {}, fetchImpl = fetch, concurrency = 3, signal, onProgress, endpoint = '/api/scan', mapPair = defaultMapPair }) {
   const todo = items.filter((it) => !known[it.key])
   const batches = makeBatches(todo)
   const results = {}
@@ -77,13 +82,10 @@ export async function runScan(items, { book, known = {}, fetchImpl = fetch, conc
     while (next < batches.length && !signal?.aborted && consecutiveFailures < 3) {
       const batch = batches[next++]
       try {
-        const res = await fetchImpl('/api/scan', {
+        const res = await fetchImpl(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            book,
-            pairs: batch.map(({ key, original, translation }) => ({ key, original, translation })),
-          }),
+          body: JSON.stringify({ book, pairs: batch.map(mapPair) }),
           signal,
         })
         const data = await res.json().catch(() => ({}))

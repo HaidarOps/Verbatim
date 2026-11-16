@@ -7,7 +7,7 @@ const MARGIN = 12
 // passage and its aligned translation to /api/rate-translation (ChatGPT, via
 // the dev server; see server/rateTranslation.js) and shows the 1-10 score and
 // the reasons. Mount it with a new `key` per selection to reset it.
-function RatingPopup({ original, translation, anchor, gc, scan, onClose }) {
+function RatingPopup({ original, translation, anchor, gc, scan, issue, onClose }) {
   const [state, setState] = useState({ phase: 'idle' }) // idle | loading | done | error
   const abortRef = useRef(null)
 
@@ -53,6 +53,7 @@ function RatingPopup({ original, translation, anchor, gc, scan, onClose }) {
         <p className="rate-passage rate-translation">{translation}</p>
       </div>
 
+      {issue && <IssueLine issue={issue} />}
       {gc && <GaleChurchLine gc={gc} />}
       {scan && <ScanLine scan={scan} />}
 
@@ -106,6 +107,26 @@ function GaleChurchLine({ gc }) {
     <p className={`rate-why rate-gc${gc.flag ? ` flag-${gc.flag}` : ''}`}>
       <strong>Length check:</strong> {text}
       {shapeNote(gc.shapes)}
+    </p>
+  )
+}
+
+// A confirmed issue: a length-check red signal that a strong model read and
+// agreed is genuinely bad (issues.js). This is the verdict the "Issues" view
+// shows; it was decided ahead of time, so there is nothing to ask ChatGPT now.
+const ISSUE_EXPLAIN = {
+  alignment:
+    'These two passages don’t actually line up — they aren’t translations of each other. The match here is wrong, so compare them with care.',
+  translation:
+    'ChatGPT read both passages and found a real problem with the translation here — something important was changed, added, or left out.',
+}
+const ISSUE_TITLE = { alignment: 'Alignment error', translation: 'Translation error' }
+function IssueLine({ issue }) {
+  const level = issue.level === 'alignment' ? 'alignment' : 'translation'
+  return (
+    <p className={`rate-why rate-issue level-${level}`}>
+      <strong>{ISSUE_TITLE[level]}:</strong> {ISSUE_EXPLAIN[level]}
+      {issue.reason ? ` It noted: “${issue.reason}”` : ''}
     </p>
   )
 }

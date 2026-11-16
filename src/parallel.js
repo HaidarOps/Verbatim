@@ -131,7 +131,7 @@ export function createLinker(pairs) {
   }
 
   // The flagged bead covering (spine, block ord, char offset) on `side`, or
-  // null. `classifiers` is { gc, scan } — a classify(bead, info) for each
+  // null. `classifiers` is { gc, scan, issue } — a classify(bead, info) for each
   // active view (null when off). Used for hover + click on an underlined
   // passage. Beads partition the text, so the first covering bead is the one.
   function issueAt(side, spine, ord, offset, classifiers) {
@@ -144,8 +144,9 @@ export function createLinker(pairs) {
         if (!covers) continue
         const gcLevel = classifiers.gc ? classifiers.gc(bead, info) : null
         const scanLevel = classifiers.scan ? classifiers.scan(bead, info) : null
-        if (!gcLevel && !scanLevel) return null
-        return { bead, info, pieces: info[side].filter((p) => p.spine === spine), gcLevel, scanLevel }
+        const issueLevel = classifiers.issue ? classifiers.issue(bead, info) : null
+        if (!gcLevel && !scanLevel && !issueLevel) return null
+        return { bead, info, pieces: info[side].filter((p) => p.spine === spine), gcLevel, scanLevel, issueLevel }
       }
     }
     return null
@@ -343,6 +344,13 @@ export const SCAN_UNDERLINE = {
   bad: ['rgba(0, 90, 255, 0.9)', 2.5], // ChatGPT score 1-3
   weak: ['rgba(0, 90, 255, 0.5)', 1.5], // ChatGPT score 4-5
 }
+// Confirmed issues (issues.js): a Gale–Church red signal a strong model has
+// agreed is genuinely bad. Only two levels, both thick — these are the verdicts
+// the "Issues" view shows. [color, thickness]. Keys are issueLevel() levels.
+export const ISSUE_UNDERLINE = {
+  translation: ['rgba(200, 0, 40, 0.95)', 3], // confirmed translation error (crimson)
+  alignment: ['rgba(150, 0, 200, 0.95)', 3], // confirmed alignment error (purple)
+}
 const HOVER_FILL = 'rgba(90, 120, 160, 0.18)' // emphasis while hovering an issue
 
 function createHeatPainter(rendition, side, getLinker, { prefix, styles, classify }) {
@@ -491,6 +499,8 @@ export function createCrossHighlighter({ onStatus, onLink, onIssue } = {}) {
   let heatOn = false
   let scanOn = false
   let scanClassify = () => null
+  let issuesOn = false
+  let issueClassify = () => null
   let generation = 0
 
   function clearAll() {
@@ -582,20 +592,27 @@ export function createCrossHighlighter({ onStatus, onLink, onIssue } = {}) {
           styles: SCAN_UNDERLINE,
           classify: () => scanClassify,
         }),
+        issues: createHeatPainter(rendition, side, () => linker, {
+          prefix: 'issue',
+          styles: ISSUE_UNDERLINE,
+          classify: () => issueClassify,
+        }),
       }
       if (heatOn) panes[side].heat.set(true)
       if (scanOn) panes[side].scan.set(true)
+      if (issuesOn) panes[side].issues.set(true)
       const onRelease = (_event, contents) => handleSelection(side, contents)
       for (const type of ['mouseup', 'touchend', 'keyup']) rendition.on(type, onRelease)
 
       // Hover + click on flagged (underlined) passages, only while a view is on.
       const findIssue = (contents, event) => {
-        if (!linker || (!heatOn && !scanOn)) return null
+        if (!linker || (!heatOn && !scanOn && !issuesOn)) return null
         const loc = locate(contents, event)
         if (!loc) return null
         return linker.issueAt(side, loc.spine, loc.ord, loc.offset, {
           gc: heatOn ? beadFlag : null,
           scan: scanOn ? scanClassify : null,
+          issue: issuesOn ? issueClassify : null,
         })
       }
       let hoverRaf = 0
@@ -622,6 +639,8 @@ export function createCrossHighlighter({ onStatus, onLink, onIssue } = {}) {
           gc: issue.gcLevel ? describeBeads([issue.bead]) : null,
           scanKey: issue.scanLevel ? issue.info.key : null,
           scanLevel: issue.scanLevel || null,
+          issueKey: issue.issueLevel ? issue.info.key : null,
+          issueLevel: issue.issueLevel || null,
         })
       })
     },
@@ -630,17 +649,26 @@ export function createCrossHighlighter({ onStatus, onLink, onIssue } = {}) {
       for (const pane of Object.values(panes)) {
         pane?.heat.refresh()
         pane?.scan.refresh()
+        pane?.issues.refresh()
       }
     },
     setHeat(on) {
       heatOn = on
       for (const pane of Object.values(panes)) pane?.heat.set(on)
     },
-    // classify(bead, info) -> level in SCAN_COLORS, or null.
+    // classify(bead, info) -> level in SCAN_UNDERLINE, or null.
     setScanView(on, classify) {
       scanOn = on
       if (classify) scanClassify = classify
       for (const pane of Object.values(panes)) pane?.scan.set(on)
+    },
+    // The confirmed-issues view: classify(bead, info) -> level in
+    // ISSUE_UNDERLINE ('alignment' | 'translation'), or null. Reads baked
+    // verdicts; no API call.
+    setIssues(on, classify) {
+      issuesOn = on
+      if (classify) issueClassify = classify
+      for (const pane of Object.values(panes)) pane?.issues.set(on)
     },
     focus({ src, tgt }) {
       generation++

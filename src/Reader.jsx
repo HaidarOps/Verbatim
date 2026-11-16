@@ -3,8 +3,9 @@ import { useParams } from 'react-router-dom'
 import ePub from 'epubjs'
 import { loadSections } from './chapters.js'
 import { alignSections, alignTexts, firstMatchedPairs } from './align.js'
-import { createCrossHighlighter, createLinker, GC_UNDERLINE, SCAN_UNDERLINE } from './parallel.js'
+import { createCrossHighlighter, createLinker, GC_UNDERLINE, ISSUE_UNDERLINE, SCAN_UNDERLINE } from './parallel.js'
 import { scanLevel } from './scan.js'
+import { countIssues, issueLevel } from './issues.js'
 import ScanPanel from './ScanPanel.jsx'
 import RatingPopup from './RatingPopup.jsx'
 import ReadingMenu from './ReadingMenu.jsx'
@@ -384,6 +385,30 @@ function CompareReader({ book }) {
     highlighter.setScanView(scanView, (_bead, info) => scanLevel(scan.results[info.key]))
   }, [highlighter, scanView, scan.results])
 
+  // Confirmed issues: the baked verdicts (strong model, Gale–Church red signals
+  // only; see issues.js and server/verifyIssues.js). Loaded once; the "Issues"
+  // view underlines them in two colours, with no live API call.
+  const [verify, setVerify] = useState({ model: '', results: {} })
+  useEffect(() => {
+    let alive = true
+    fetch(`/api/verify?book=${encodeURIComponent(book.id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => alive && data && setVerify({ model: data.model, results: data.results || {} }))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [book.id])
+  const addVerifyResults = useCallback(
+    (fresh) => setVerify((v) => ({ ...v, results: { ...v.results, ...fresh } })),
+    [],
+  )
+  const issuesCount = useMemo(() => countIssues(verify.results), [verify.results])
+  const [issuesView, setIssuesView] = useState(false)
+  useEffect(() => {
+    highlighter.setIssues(issuesView, (_bead, info) => issueLevel(verify.results[info.key]))
+  }, [highlighter, issuesView, verify.results])
+
   // Status messages fade after a few seconds.
   useEffect(() => {
     if (!status) return
@@ -438,6 +463,19 @@ function CompareReader({ book }) {
           Contents
         </button>
         <button
+          className={`align-button issues-button${issuesView ? ' active' : ''}`}
+          onClick={() => setIssuesView((on) => !on)}
+          aria-pressed={issuesView}
+          disabled={issuesCount.total === 0}
+          title={
+            issuesCount.total === 0
+              ? 'No confirmed issues yet — run a ChatGPT scan to verify the flagged passages'
+              : `Show ${issuesCount.total} confirmed issue${issuesCount.total === 1 ? '' : 's'} (${issuesCount.translation} translation, ${issuesCount.alignment} alignment)`
+          }
+        >
+          Issues{issuesCount.total > 0 ? ` (${issuesCount.total})` : ''}
+        </button>
+        <button
           className={`align-button${parallel ? ' active' : ''}`}
           onClick={() => setParallel((on) => !on)}
           aria-pressed={parallel}
@@ -470,7 +508,7 @@ function CompareReader({ book }) {
         </button>
       </div>
       {note && <div className="compare-status">{note}</div>}
-      {(heat || scanView) && <HeatLegend gc={heat} scan={scanView} />}
+      {(heat || scanView || issuesView) && <HeatLegend gc={heat} scan={scanView} issues={issuesView} />}
       <EpubPane
         className={`epub-pane${!parallel && book.englishSide === 'translation' ? ' pane-hidden' : ''}`}
         url={book.url}
@@ -512,6 +550,11 @@ function CompareReader({ book }) {
               ? { level: linked.scanLevel, ...(scan.results[linked.scanKey] || {}) }
               : null
           }
+          issue={
+            linked.issueLevel
+              ? { level: linked.issueLevel, ...(verify.results[linked.issueKey] || {}) }
+              : null
+          }
           onClose={closePopup}
         />
       )}
@@ -529,6 +572,8 @@ function CompareReader({ book }) {
           book={book.id}
           scan={scan}
           onResults={addScanResults}
+          verify={verify}
+          onVerifyResults={addVerifyResults}
           onFocus={(pair) => {
             setShowScan(false)
             highlighter.focus(pair)
@@ -551,8 +596,13 @@ const SCAN_LABELS = {
   bad: 'ChatGPT: score 1–3',
   weak: 'ChatGPT: score 4–5',
 }
-function HeatLegend({ gc, scan }) {
+const ISSUE_LABELS = {
+  translation: 'Confirmed translation error',
+  alignment: 'Confirmed alignment error',
+}
+function HeatLegend({ gc, scan, issues }) {
   const items = [
+    ...(issues ? Object.entries(ISSUE_LABELS).map(([level, label]) => [label, ISSUE_UNDERLINE[level][0]]) : []),
     ...(gc ? Object.entries(HEAT_LABELS).map(([level, label]) => [label, GC_UNDERLINE[level][0]]) : []),
     ...(scan ? Object.entries(SCAN_LABELS).map(([level, label]) => [label, SCAN_UNDERLINE[level][0]]) : []),
   ]

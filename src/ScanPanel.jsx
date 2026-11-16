@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { compareScan, estimateTokens, runScan, scannable } from './scan.js'
+import { countIssues, issueLevel, redSignals, runVerify } from './issues.js'
 
 // Aligning a whole book takes a few seconds; do it once per linker.
 const beadsByLinker = new WeakMap()
@@ -15,7 +16,7 @@ const KIND_LABEL = { good: 'good', translation_issue: 'translation issue', not_m
 
 // Modal for the whole-book ChatGPT scan: estimate, run (resumable), and the
 // report on how Gale–Church's flags line up with ChatGPT's.
-function ScanPanel({ linker, book, scan, onResults, onFocus, onClose }) {
+function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, onFocus, onClose }) {
   const [beads, setBeads] = useState(null)
   const [prep, setPrep] = useState({ done: 0, total: 0 })
   const [run, setRun] = useState(null) // progress while scanning / after a run
@@ -76,6 +77,15 @@ function ScanPanel({ linker, book, scan, onResults, onFocus, onClose }) {
 
         {beads && (
           <div className="scan-body">
+            <IssuesSection
+              beads={beads}
+              book={book}
+              verify={verify || { model: '', results: {} }}
+              onVerifyResults={onVerifyResults}
+              onFocus={onFocus}
+            />
+
+            <h3 className="scan-section-title">Whole-book scan (cheap model)</h3>
             <p>
               {fmt(items.length)} aligned passage pairs ({fmt(beads.length - items.length)} one-sided pairs have
               nothing to compare and are skipped). Scanned so far: <b>{fmt(items.length - remaining.length)}</b>.
@@ -119,6 +129,116 @@ function ScanPanel({ linker, book, scan, onResults, onFocus, onClose }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// The headline feature: verify the Gale–Church red signals with the strong
+// model (issues.js → /api/verify), keep only the ones it agrees are really bad,
+// split into translation vs alignment errors. Runs once; the verdicts are
+// cached on disk, so the reader's "Issues" view needs no API call afterwards.
+const ISSUE_TAG = { translation: 'Translation error', alignment: 'Alignment error' }
+function IssuesSection({ beads, book, verify, onVerifyResults, onFocus }) {
+  const [run, setRun] = useState(null)
+  const abortRef = useRef(null)
+  useEffect(() => () => abortRef.current?.abort(), [])
+
+  const results = verify.results
+  const signals = useMemo(() => redSignals(beads), [beads])
+  const remaining = useMemo(() => signals.filter((s) => !results[s.key]), [signals, results])
+  const counts = useMemo(() => countIssues(results), [results])
+  const confirmed = useMemo(
+    () =>
+      signals
+        .filter((s) => issueLevel(results[s.key]))
+        .sort((a, b) => (results[b.key].severity || 0) - (results[a.key].severity || 0)),
+    [signals, results],
+  )
+  const estimate = useMemo(() => estimateTokens(remaining), [remaining])
+  const running = run && run.running
+
+  async function start() {
+    const controller = new AbortController()
+    abortRef.current = controller
+    setRun({ running: true, done: 0, total: estimate.batches, failed: 0, error: '' })
+    const out = await runVerify(signals, {
+      book,
+      known: results,
+      signal: controller.signal,
+      onProgress: (p) => {
+        setRun({ running: true, ...p })
+        onVerifyResults?.(p.results)
+      },
+    })
+    onVerifyResults?.(out.results)
+    setRun({ running: false, ...out, aborted: controller.signal.aborted })
+  }
+
+  return (
+    <div className="scan-issues">
+      <h3 className="scan-section-title">Confirmed issues</h3>
+      <p>
+        The length check flagged <b>{fmt(signals.length)}</b> passages. Verified with{' '}
+        <span className="scan-model">{verify.model || 'the strong model'}</span>:{' '}
+        <b>{fmt(signals.length - remaining.length)}</b>. Confirmed problems: <b>{fmt(counts.total)}</b>
+        {counts.total > 0 && ` (${fmt(counts.translation)} translation, ${fmt(counts.alignment)} alignment)`}.
+      </p>
+
+      {signals.length === 0 && <p className="scan-dim">No Gale–Church red signals to verify in this book.</p>}
+
+      {remaining.length > 0 && !running && (
+        <div className="scan-start">
+          <p>
+            Remaining: {fmt(remaining.length)} flagged pairs in {fmt(estimate.batches)} requests. Verdicts are saved
+            as they arrive, so you can stop and resume — and once saved the reader shows them with no further calls.
+          </p>
+          <button className="rate-button" onClick={start}>
+            Verify {fmt(remaining.length)} flagged passage{remaining.length === 1 ? '' : 's'}
+          </button>
+        </div>
+      )}
+
+      {run && (
+        <div className="scan-progress">
+          <div className="scan-bar">
+            <div style={{ width: `${run.total ? (100 * run.done) / run.total : 0}%` }} />
+          </div>
+          <p>
+            {running ? 'Verifying' : run.aborted ? 'Stopped' : 'Finished'}: {fmt(run.done)} / {fmt(run.total)} requests
+            {run.failed > 0 && `, ${run.failed} failed`}
+            {run.usage && run.usage.prompt_tokens > 0 &&
+              ` · used ${fmt(run.usage.prompt_tokens)} input + ${fmt(run.usage.completion_tokens)} output tokens`}
+            {running && (
+              <button className="scan-stop" onClick={() => abortRef.current?.abort()}>
+                Stop
+              </button>
+            )}
+          </p>
+          {run.error && <p className="rate-error">{run.stopped ? 'Stopped after repeated errors: ' : ''}{run.error}</p>}
+        </div>
+      )}
+
+      {confirmed.length > 0 && (
+        <>
+          <p className="scan-dim">Click an issue to show it in the book.</p>
+          <ul className="scan-examples">
+            {confirmed.slice(0, 30).map((ex) => {
+              const level = issueLevel(results[ex.key])
+              return (
+                <li key={ex.key} onClick={() => onFocus(ex)}>
+                  <div className="scan-meta">
+                    <span className={`issue-tag issue-${level}`}>{ISSUE_TAG[level]}</span>
+                    {ex.section && <span>{ex.section.slice(0, 50)}</span>}
+                  </div>
+                  <p className="rate-passage rate-original">{ex.original}</p>
+                  <p className="rate-passage rate-translation">{ex.translation}</p>
+                  {results[ex.key].reason && <p className="scan-issue">{results[ex.key].reason}</p>}
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
     </div>
   )
 }
