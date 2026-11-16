@@ -230,13 +230,24 @@ a {
 .rate-scan {
   color: #0a49d6;
 }
-/* Confirmed-issue line in the popup: crimson for a translation error, purple
+/* Confirmed-issue block in the popup: crimson for a translation error, purple
    for an alignment error (matches ISSUE_UNDERLINE in parallel.js). */
 .rate-issue.level-translation {
   color: #c80028;
 }
 .rate-issue.level-alignment {
   color: #9600c8;
+}
+.rate-issue p {
+  margin: 0;
+}
+/* What a faithful translation should have conveyed here (the `expected`
+   field): the missing or altered meaning, set apart from the one-line verdict. */
+.rate-issue-expected {
+  margin-top: 6px !important;
+  padding-top: 6px;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+  color: #333;
 }
 
 /* "Issues" toolbar button: the headline action, tinted when it has a count. */
@@ -580,6 +591,13 @@ a {
   margin: 4px 0 0;
   font-size: 13px;
   color: #b00020;
+}
+/* The `expected` field in the scan panel's confirmed list: what the original
+   actually means that the translation gets wrong or leaves out. */
+.scan-expected {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: #333;
 }
 
 /* Confirmed-issues section of the scan panel (the headline feature). */

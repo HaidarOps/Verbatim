@@ -3,7 +3,9 @@
 // browser.
 //
 //   POST /api/verify  { book, pairs: [{ key, original, translation, flag }] }
-//        -> { model, results: { [key]: { verdict, severity, reason } } }
+//        -> { model, results: { [key]: { verdict, severity, reason, expected } } }
+//   where `expected` is, for an error, a plain-English account of what the
+//   original actually means that the translation gets wrong or leaves out.
 //   GET  /api/verify?book=<id>
 //        -> { model, results }  (everything verified so far)
 //
@@ -50,9 +52,14 @@ liberties), give it "fine". Be strict about reserving the two error verdicts for
 genuine, clear, significant problems: a reader should agree it is really bad. When
 in doubt, answer "fine".
 
-"severity": 1-5, how bad the problem is (5 = egregious); 0 when the verdict is
-"fine". "reason": at most 20 words naming the problem and the words involved;
-empty string when "fine". Return exactly one result for every id.`
+For each result give:
+- "severity": 1-5, how bad the problem is (5 = egregious); 0 when the verdict is "fine".
+- "reason": at most 20 words naming the problem and the exact words involved; empty when "fine".
+- "expected": for an error, one or two plain-English sentences saying what the
+  original passage actually means here that the translation gets wrong or leaves
+  out — the missing or altered content itself, quoting the key original words so
+  a reader sees exactly what is absent. Empty string when the verdict is "fine".
+Return exactly one result for every id.`
 
 const RESPONSE_SCHEMA = {
   name: 'issue_verification',
@@ -67,12 +74,13 @@ const RESPONSE_SCHEMA = {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['id', 'verdict', 'severity', 'reason'],
+          required: ['id', 'verdict', 'severity', 'reason', 'expected'],
           properties: {
             id: { type: 'string' },
             verdict: { type: 'string', enum: VERDICTS },
             severity: { type: 'integer' },
             reason: { type: 'string' },
+            expected: { type: 'string' },
           },
         },
       },
@@ -160,6 +168,7 @@ export async function verifyBatch(pairs, { apiKey, model, reasoning, fetchImpl =
       verdict,
       severity: verdict === 'fine' ? 0 : Math.min(5, Math.max(1, Math.round(Number(r.severity) || 1))),
       reason: verdict === 'fine' ? '' : String(r.reason || '').slice(0, 200),
+      expected: verdict === 'fine' ? '' : String(r.expected || '').slice(0, 500),
     }
   }
   return { results: out, usage: data.usage || null }

@@ -124,10 +124,17 @@ const ISSUE_TITLE = { alignment: 'Alignment error', translation: 'Translation er
 function IssueLine({ issue }) {
   const level = issue.level === 'alignment' ? 'alignment' : 'translation'
   return (
-    <p className={`rate-why rate-issue level-${level}`}>
-      <strong>{ISSUE_TITLE[level]}:</strong> {ISSUE_EXPLAIN[level]}
-      {issue.reason ? ` It noted: “${issue.reason}”` : ''}
-    </p>
+    <div className={`rate-why rate-issue level-${level}`}>
+      <p>
+        <strong>{ISSUE_TITLE[level]}:</strong> {ISSUE_EXPLAIN[level]}
+        {issue.reason ? ` It noted: “${issue.reason}”` : ''}
+      </p>
+      {issue.expected && (
+        <p className="rate-issue-expected">
+          <strong>What’s missing or changed:</strong> {issue.expected}
+        </p>
+      )}
+    </div>
   )
 }
 

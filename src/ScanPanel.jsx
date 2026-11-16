@@ -233,6 +233,7 @@ function IssuesSection({ beads, book, verify, onVerifyResults, onFocus }) {
                   <p className="rate-passage rate-original">{ex.original}</p>
                   <p className="rate-passage rate-translation">{ex.translation}</p>
                   {results[ex.key].reason && <p className="scan-issue">{results[ex.key].reason}</p>}
+                  {results[ex.key].expected && <p className="scan-expected">{results[ex.key].expected}</p>}
                 </li>
               )
             })}

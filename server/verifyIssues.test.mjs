@@ -29,6 +29,7 @@ function fakeOpenAI({ drop = [] } = {}) {
         verdict: verdictFor(id),
         severity: verdictFor(id) === 'fine' ? 0 : id === 'p1' ? 5 : 3,
         reason: verdictFor(id) === 'fine' ? '' : 'something is wrong',
+        expected: verdictFor(id) === 'fine' ? '' : 'the original says the man wept at the inn door',
       }))
     return {
       ok: true,
@@ -50,6 +51,7 @@ console.log('\n# verifyBatch')
   const { results } = await verifyBatch(pairs, { apiKey: 'k', model: 'strong-model', fetchImpl })
   check('maps ids back to keys with verdicts', results.a.verdict === 'alignment_error' && results.b.verdict === 'translation_error')
   check('fine verdict clears severity and reason', results.a.severity === 5 && results.b.reason === 'something is wrong')
+  check('an error carries the expected-meaning explanation', results.b.expected.includes('wept at the inn door'))
   check('pairs the model skipped are left out (retried later)', !('c' in results))
   check('the Gale–Church flag is sent as a hint', calls[0].messages[1].content.includes('flag: unmatched'))
   check('one request, strict JSON', calls.length === 1 && calls[0].model === 'strong-model' && calls[0].response_format.json_schema.strict === true)
