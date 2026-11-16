@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { compareScan, estimateTokens, runScan, scannable } from './scan.js'
-import { countIssues, issueLevel, redSignals, runVerify } from './issues.js'
+import { candidates, countIssues, issueLevel, runVerify } from './issues.js'
 
 // Aligning a whole book takes a few seconds; do it once per linker.
 const beadsByLinker = new WeakMap()
@@ -81,6 +81,7 @@ function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, onF
               beads={beads}
               book={book}
               verify={verify || { model: '', results: {} }}
+              scanResults={scan.results}
               onVerifyResults={onVerifyResults}
               onFocus={onFocus}
             />
@@ -138,13 +139,16 @@ function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, onF
 // split into translation vs alignment errors. Runs once; the verdicts are
 // cached on disk, so the reader's "Issues" view needs no API call afterwards.
 const ISSUE_TAG = { translation: 'Translation error', alignment: 'Alignment error' }
-function IssuesSection({ beads, book, verify, onVerifyResults, onFocus }) {
+function IssuesSection({ beads, book, verify, scanResults, onVerifyResults, onFocus }) {
   const [run, setRun] = useState(null)
   const abortRef = useRef(null)
   useEffect(() => () => abortRef.current?.abort(), [])
 
   const results = verify.results
-  const signals = useMemo(() => redSignals(beads), [beads])
+  // Candidates from BOTH cheap detectors (Gale–Church + the whole-book scan, if
+  // it has been run); falls back to Gale–Church only when there is no scan.
+  const signals = useMemo(() => candidates(beads, scanResults), [beads, scanResults])
+  const gcCount = useMemo(() => signals.filter((s) => s.gcFlag).length, [signals])
   const remaining = useMemo(() => signals.filter((s) => !results[s.key]), [signals, results])
   const counts = useMemo(() => countIssues(results), [results])
   const confirmed = useMemo(
@@ -164,6 +168,7 @@ function IssuesSection({ beads, book, verify, onVerifyResults, onFocus }) {
     const out = await runVerify(signals, {
       book,
       known: results,
+      scanResults,
       signal: controller.signal,
       onProgress: (p) => {
         setRun({ running: true, ...p })
@@ -178,13 +183,23 @@ function IssuesSection({ beads, book, verify, onVerifyResults, onFocus }) {
     <div className="scan-issues">
       <h3 className="scan-section-title">Confirmed issues</h3>
       <p>
-        The length check flagged <b>{fmt(signals.length)}</b> passages. Verified with{' '}
-        <span className="scan-model">{verify.model || 'the strong model'}</span>:{' '}
+        The length check and the cheap scan together flagged <b>{fmt(signals.length)}</b> passages
+        {signals.length > 0 && (
+          <span className="scan-dim">
+            {' '}({fmt(gcCount)} by length, {fmt(signals.length - gcCount)} only by the cheap scan)
+          </span>
+        )}
+        . Verified with <span className="scan-model">{verify.model || 'the strong model'}</span>:{' '}
         <b>{fmt(signals.length - remaining.length)}</b>. Confirmed problems: <b>{fmt(counts.total)}</b>
         {counts.total > 0 && ` (${fmt(counts.translation)} translation, ${fmt(counts.alignment)} alignment)`}.
       </p>
 
-      {signals.length === 0 && <p className="scan-dim">No Gale–Church red signals to verify in this book.</p>}
+      {signals.length === 0 && (
+        <p className="scan-dim">
+          Nothing flagged yet. The length check found no red signals; run the cheap scan below to
+          widen the net.
+        </p>
+      )}
 
       {remaining.length > 0 && !running && (
         <div className="scan-start">

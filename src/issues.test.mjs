@@ -1,6 +1,6 @@
 // Tests for the confirmed-issues logic (src/issues.js).
 // Run: node src/issues.test.mjs
-import { countIssues, isConfirmedIssue, issueLevel, redSignals, runVerify } from './issues.js'
+import { candidates, countIssues, isConfirmedIssue, issueLevel, nominationFlag, redSignals, runVerify } from './issues.js'
 
 let failures = 0
 function check(name, cond, detail = '') {
@@ -16,16 +16,34 @@ console.log('\n# issueLevel / isConfirmedIssue')
   check('isConfirmedIssue only for the two errors', isConfirmedIssue({ verdict: 'translation_error' }) && !isConfirmedIssue({ verdict: 'fine' }))
 }
 
-console.log('\n# redSignals')
+console.log('\n# candidates / redSignals (union of both indicators)')
 {
   const beads = [
-    { key: 'a', gcFlag: 'unmatched', original: 'x', translation: 'y' },
-    { key: 'b', gcFlag: null, original: 'x', translation: 'y' }, // not flagged
-    { key: 'c', gcFlag: 'mismatch', original: 'x', translation: '' }, // one-sided
-    { key: 'd', gcFlag: 'loose', original: 'x', translation: 'y' },
+    { key: 'a', gcFlag: 'unmatched', original: 'x', translation: 'y' }, // length only
+    { key: 'b', gcFlag: null, original: 'x', translation: 'y' }, // scan only (below)
+    { key: 'c', gcFlag: 'mismatch', original: 'x', translation: '' }, // one-sided: dropped
+    { key: 'd', gcFlag: 'loose', original: 'x', translation: 'y' }, // length + scan (below)
+    { key: 'e', gcFlag: null, original: 'x', translation: 'y' }, // unflagged by both
   ]
-  const signals = redSignals(beads)
-  check('keeps only flagged, both-sided beads', signals.map((b) => b.key).join() === 'a,d', signals.map((b) => b.key).join())
+  const scanResults = {
+    b: { kind: 'not_matching', score: 1 }, // scan flag
+    d: { kind: 'translation_issue', score: 3 }, // scan flag (also gc)
+    e: { kind: 'good', score: 9 }, // not a scan flag
+  }
+
+  check('Gale–Church only (no scan) matches redSignals', redSignals(beads).map((b) => b.key).sort().join() === 'a,d')
+  const union = candidates(beads, scanResults)
+  check('union adds scan-only beads, still drops one-sided', union.map((b) => b.key).sort().join() === 'a,b,d', union.map((b) => b.key).join())
+  check('both-flagged come first (highest confidence)', union[0].key === 'd', union.map((b) => b.key).join())
+  check('empty scanResults equals Gale–Church only', candidates(beads, {}).map((b) => b.key).sort().join() === 'a,d')
+}
+
+console.log('\n# nominationFlag')
+{
+  const scanResults = { d: { kind: 'translation_issue', score: 3 } }
+  check('names the length detector', nominationFlag({ key: 'a', gcFlag: 'mismatch' }, {}) === 'length check: length mismatch')
+  check('names the scan detector', nominationFlag({ key: 'd', gcFlag: null }, scanResults) === 'quick AI read: likely a bad translation')
+  check('names both when both fired', nominationFlag({ key: 'd', gcFlag: 'loose' }, scanResults) === 'length check: unusual length; quick AI read: likely a bad translation')
 }
 
 console.log('\n# countIssues')
@@ -41,12 +59,16 @@ console.log('\n# countIssues')
   check('empty results give zeroes', countIssues({}).total === 0)
 }
 
-console.log('\n# runVerify posts flagged pairs to /api/verify')
+console.log('\n# runVerify posts flagged pairs to /api/verify with a source hint')
 {
-  const items = redSignals([
-    { key: 'k1', gcFlag: 'unmatched', original: 'One.', translation: 'Elsewhere.' },
-    { key: 'k2', gcFlag: 'mismatch', original: 'Two.', translation: 'Deux.' },
-  ])
+  const scanResults = { k2: { kind: 'not_matching', score: 1 } }
+  const items = candidates(
+    [
+      { key: 'k1', gcFlag: 'unmatched', original: 'One.', translation: 'Elsewhere.' },
+      { key: 'k2', gcFlag: null, original: 'Two.', translation: 'Deux.' }, // scan-only
+    ],
+    scanResults,
+  )
   const sent = []
   let url = ''
   const fakeFetch = async (u, init) => {
@@ -56,9 +78,11 @@ console.log('\n# runVerify posts flagged pairs to /api/verify')
     const results = Object.fromEntries(body.pairs.map((p) => [p.key, { verdict: 'fine', severity: 0, reason: '' }]))
     return { ok: true, json: async () => ({ results, usage: { prompt_tokens: 10, completion_tokens: 2 } }) }
   }
-  const out = await runVerify(items, { book: 'b', fetchImpl: fakeFetch, onProgress: () => {} })
+  const out = await runVerify(items, { book: 'b', scanResults, fetchImpl: fakeFetch, onProgress: () => {} })
   check('targets the /api/verify endpoint', url === '/api/verify', url)
-  check('each pair carries its Gale–Church flag as "flag"', sent[0].pairs[0].flag === 'unmatched' && sent[0].pairs[1].flag === 'mismatch')
+  const flagFor = (key) => sent.flatMap((b) => b.pairs).find((p) => p.key === key).flag
+  check('a length-flagged pair names the length check', flagFor('k1') === 'length check: no counterpart by length', flagFor('k1'))
+  check('a scan-only pair names the AI read', flagFor('k2') === 'quick AI read: likely not a translation', flagFor('k2'))
   check('collects a result per pair', Object.keys(out.results).sort().join() === 'k1,k2')
 }
 
