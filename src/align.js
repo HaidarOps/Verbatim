@@ -223,8 +223,9 @@ export function alignLengths(sourceLens, targetLens, options = {}) {
     const pj = j - tn
     const cost = D[i * W + j] - D[pi * W + pj]
     // lengthCost: the part of the cost due to the length mismatch alone
-    // (-100·log p), without the prior penalty for the bead shape.
-    beads.push({ s: pi, sn, t: pj, tn, cost, lengthCost: cost - penalty })
+    // (-100·log p), without the prior penalty for the bead shape. l1/l2 are the
+    // two sides' character lengths, kept for the length-ratio checks below.
+    beads.push({ s: pi, sn, t: pj, tn, cost, lengthCost: cost - penalty, l1: psSrc[i] - psSrc[pi], l2: psTgt[j] - psTgt[pj] })
     i = pi
     j = pj
   }
@@ -741,7 +742,30 @@ export function alignLines(srcLines, tgtLines) {
   const tgt = locate(tgtLines)
   const len = (lines) => (s) => sentenceLength(lines[s.line].text.slice(s.start, s.end))
   const { beads } = alignLengths(src.map(len(srcLines)), tgt.map(len(tgtLines)))
-  return { src, tgt, beads }
+  return { src, tgt, beads: trimApparatusTail(beads) }
+}
+
+// A section's real text ends at its last confident bilingual bead; whatever
+// trails it that only one edition has — a publisher's blurb, a synopsis,
+// endnotes, a reprint notice, a stray verse — is apparatus one side carries and
+// the other doesn't. The aligner can't skip it cleanly (it has no counterpart
+// to pair against), so it drifts, matching the real closing lines to that junk.
+//
+// Drop the trailing run of "unmatched" beads — ones with no real counterpart:
+// one-sided (0-1 / 1-0) or extremely lopsided (see beadFlag). Only when the run
+// is long enough (>= MIN_TAIL_RUN) to be apparatus rather than, say, a single
+// trailing note. Edition-agnostic: it reads the alignment's own confidence, not
+// any publisher's markers.
+//
+// Deliberately conservative — it will NOT trim "mismatch"/"loose" beads. Those
+// depend on the book's overall length ratio c, which a big insertion or a pile
+// of apparatus inflates, so trimming on them risks eating the real ending.
+// Better to leave some apparatus than to silently drop translated text.
+const MIN_TAIL_RUN = 3
+export function trimApparatusTail(beads) {
+  let keep = beads.length
+  while (keep > 0 && beadFlag(beads[keep - 1]) === 'unmatched') keep--
+  return beads.length - keep >= MIN_TAIL_RUN ? beads.slice(0, keep) : beads
 }
 
 // Given sentence indices hit on one side ('src' or 'tgt'), return the full
@@ -808,8 +832,30 @@ export const FLAG_LEVELS = ['unmatched', 'mismatch', 'loose'] // most → least 
 const MISMATCH_COST = -100 * Math.log(0.01) // ≈ 460
 const LOOSE_COST = -100 * Math.log(0.05) // ≈ 300
 
+// How lopsided a bead is: the longer side's length over the shorter's, with the
+// source scaled by `c` (expected target chars per source char) so a book whose
+// translation runs systematically longer or shorter isn't counted as lopsided.
+// 1 = the sides match; large = one side dwarfs the other (untranslated
+// apparatus, a bad merge, alignment drift). Infinity when one side is empty.
+export function beadLengthRatio(bead, c = 1) {
+  if (bead.l1 == null || bead.l2 == null) return 1
+  const a = bead.l1 * c
+  const b = bead.l2
+  const big = Math.max(a, b)
+  const small = Math.min(a, b)
+  return small <= 0 ? Infinity : big / small
+}
+
+// One side many times longer than the other is not a translation-quality
+// problem but a structural one — the bulk of the long side has no counterpart.
+// Flag it "unmatched" (no counterpart) rather than "mismatch" (which reads as
+// "the translation changed something"), so the length check stops blaming the
+// translation for apparatus and drift.
+const EXTREME_RATIO = 4
+
 export function beadFlag(bead) {
   if (bead.sn === 0 || bead.tn === 0) return 'unmatched'
+  if (beadLengthRatio(bead) >= EXTREME_RATIO) return 'unmatched'
   if (bead.lengthCost > MISMATCH_COST) return 'mismatch'
   if (bead.lengthCost > LOOSE_COST) return 'loose'
   return null

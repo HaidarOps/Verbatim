@@ -18,6 +18,8 @@ import {
   counterpartSentences,
   beadFlag,
   beadLengthP,
+  beadLengthRatio,
+  trimApparatusTail,
   isMatterHeading,
   dropEditorialMatter,
   sectionNumber,
@@ -280,6 +282,15 @@ console.log('\n# Gale–Church flags for the heat map')
   check('a good fit is not flagged, whatever its shape', beadFlag(bead(1, 2, -100 * Math.log(0.5))) === null && beadFlag(bead(2, 2, 10)) === null)
   check('length p is recovered from the cost', Math.abs(beadLengthP(bead(1, 1, -100 * Math.log(0.2))) - 0.2) < 1e-9 && beadLengthP(bead(1, 0, 0)) === null)
 
+  // Extreme length-ratio guard: a bead where one side dwarfs the other is a
+  // structural problem (apparatus, drift), flagged "unmatched", not a
+  // translation-quality "mismatch".
+  check('length ratio corrects for c', beadLengthRatio({ l1: 100, l2: 300 }) === 3 && beadLengthRatio({ l1: 100, l2: 300 }, 2) === 1.5)
+  check('ratio is 1 when lengths are unknown', beadLengthRatio({ sn: 1, tn: 1 }) === 1)
+  const lop = { sn: 1, tn: 2, lengthCost: 50, l1: 70, l2: 650 } // ~9x
+  check('an extremely lopsided bead is "unmatched", not "mismatch"', beadLengthRatio(lop) > 4 && beadFlag(lop) === 'unmatched')
+  check('a normally-proportioned bead keeps its length verdict', beadFlag({ sn: 1, tn: 1, lengthCost: 0, l1: 100, l2: 120 }) === null)
+
   // Real alignments (one sentence per line, as the synthetic sentences start
   // lowercase and the splitter would otherwise join them). Classic Gale–Church
   // charges a 0-1 bead a length cost as if matched to nothing, so it hides an
@@ -294,6 +305,27 @@ console.log('\n# Gale–Church flags for the heat map')
   const al = alignLines(lines(src), lines(tgt))
   const atInsert = al.beads.find((b) => b.t <= 6 && b.t + b.tn > 6)
   check('a long inserted sentence is flagged where it was absorbed', !!atInsert && beadFlag(atInsert) === 'mismatch' && atInsert.tn >= 1, JSON.stringify(atInsert))
+  check('the real ending is never trimmed (mid-text insertion keeps every bead)', al.beads.length === alignLengths(src.map((s) => s.length), tgt.map((s) => s.length)).beads.length)
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n# trimming apparatus off the tail')
+{
+  // Hand-built bead lists so the trim is tested directly, without the DP (where
+  // apparatus inflates c and muddies the picture). Only trailing "unmatched"
+  // beads — one-sided or extreme-ratio — are dropped, and only a long enough run.
+  const good = (s) => ({ s, sn: 1, t: s, tn: 1, lengthCost: 0, l1: 100, l2: 100 }) // confident
+  const oneSided = (s) => ({ s, sn: 0, t: s, tn: 1, lengthCost: 0, l1: 0, l2: 400 }) // apparatus
+  const lopsided = (s) => ({ s, sn: 1, t: s, tn: 1, lengthCost: 50, l1: 50, l2: 400 }) // ~8x
+  const mismatch = (s) => ({ s, sn: 1, t: s, tn: 1, lengthCost: 500, l1: 100, l2: 180 }) // flagged, not unmatched
+
+  const story = [good(0), good(1), good(2), good(3)]
+  check('a clean ending keeps every bead', trimApparatusTail([...story]).length === 4)
+  check('a short trailing run (< 3) is left alone', trimApparatusTail([...story, oneSided(4), lopsided(5)]).length === 6)
+  const trimmed = trimApparatusTail([...story, oneSided(4), lopsided(5), oneSided(6)])
+  check('a long trailing run of unmatched beads is dropped to the last match', trimmed.length === 4 && beadFlag(trimmed.at(-1)) === null)
+  check('only the tail is trimmed, not unmatched beads mid-text', trimApparatusTail([oneSided(0), oneSided(1), oneSided(2), good(3)]).length === 4)
+  check('mismatch/loose beads are never trimmed (c-sensitive, risky)', trimApparatusTail([...story, mismatch(4), mismatch(5), mismatch(6)]).length === 7)
 }
 
 // ---------------------------------------------------------------------------
