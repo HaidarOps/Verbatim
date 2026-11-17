@@ -4,8 +4,11 @@
 //
 //   POST /api/verify  { book, pairs: [{ key, original, translation, flag }] }
 //        -> { model, results: { [key]: { verdict, severity, reason, expected } } }
-//   where `expected` is, for an error, a plain-English account of what the
-//   original actually means that the translation gets wrong or leaves out.
+//   where `expected` is, for an error, a plain-English gist for a reader who
+//   knows neither language: for a translation error, what the source means and
+//   what the translation gets wrong; for an alignment error, what each side is
+//   about (making clear they don't correspond). The model decides which side is
+//   the original — it is not assumed to be PASSAGE A.
 //   GET  /api/verify?book=<id>
 //        -> { model, results }  (everything verified so far)
 //
@@ -33,32 +36,38 @@ const MAX_PAIRS = 20 // per request; these passages are the long, suspicious one
 const MAX_SIDE_CHARS = 2000 // per side of a pair; longer text is truncated
 const VERDICTS = ['alignment_error', 'translation_error', 'fine']
 
-const SYSTEM_PROMPT = `You are an expert literary translator auditing a published
-translation. A fast length-based heuristic has flagged the passage pairs below
-as suspicious; your job is to confirm or clear each one by actually reading it.
-Each pair has an id, the ORIGINAL passage and the TRANSLATION passage, and a
-"flag" naming why the heuristic was suspicious. The languages may be anything;
-identify them yourself.
+const SYSTEM_PROMPT = `You are an expert literary translator auditing how two
+editions of the same work line up. A fast heuristic (and sometimes a quick AI
+read) flagged the passage pairs below as suspicious; confirm or clear each by
+reading it. Each pair has an id, a "flag" naming why it was suspicious, and two
+passages — PASSAGE A and PASSAGE B — the same span from the two editions, in
+different languages. Identify each language yourself.
 
-The pairs were matched automatically, so some pairs do not actually correspond —
-the real translation of this original is elsewhere. Give such a pair the verdict
-"alignment_error".
+Do NOT assume which side is the original. For many works the classical or
+source-language side (Greek, Latin, French, Russian, …) is the original and the
+English is the translation, not the other way round. Decide which is the source
+and which is the translation from the languages and the content.
 
-If the pair does correspond but the translation is seriously wrong — a real
-omission, addition, or distortion of meaning — give it "translation_error".
-
-Otherwise, if the translation is acceptable (faithful enough, with at most minor
-liberties), give it "fine". Be strict about reserving the two error verdicts for
-genuine, clear, significant problems: a reader should agree it is really bad. When
-in doubt, answer "fine".
+Give each pair one verdict:
+- "alignment_error": the two passages are not about the same thing — they do not
+  correspond (the matcher paired the wrong pieces, or the editions are offset
+  here). Use this whenever the content differs substantially, EVEN IF each
+  passage reads fine on its own. Do not describe this as a translation mistake.
+- "translation_error": the passages DO correspond, but the translation is
+  seriously wrong — a real omission, addition, or distortion of meaning.
+- "fine": they correspond and the translation is acceptable (minor liberties ok).
+Be strict: reserve the two error verdicts for clear, significant problems a
+reader would agree are really bad. When in doubt, answer "fine".
 
 For each result give:
 - "severity": 1-5, how bad the problem is (5 = egregious); 0 when the verdict is "fine".
-- "reason": at most 20 words naming the problem and the exact words involved; empty when "fine".
-- "expected": for an error, one or two plain-English sentences saying what the
-  original passage actually means here that the translation gets wrong or leaves
-  out — the missing or altered content itself, quoting the key original words so
-  a reader sees exactly what is absent. Empty string when the verdict is "fine".
+- "reason": at most 20 words naming the problem; empty when "fine".
+- "expected": for an error, a plain-English gist for a reader who knows NEITHER
+  language — name the language of each side ("The Greek says…; the English
+  says…"). For a translation_error, say what the source passage actually means
+  and what the translation gets wrong or leaves out. For an alignment_error, say
+  in one line what each passage is about, making clear they do not match. Empty
+  string when the verdict is "fine".
 Return exactly one result for every id.`
 
 const RESPONSE_SCHEMA = {
@@ -124,7 +133,7 @@ export async function verifyBatch(pairs, { apiKey, model, reasoning, fetchImpl =
     const id = `p${i + 1}`
     byId.set(id, p.key)
     const flag = p.flag ? `\nflag: ${p.flag}` : ''
-    return `[${id}]${flag}\nORIGINAL: ${clip(p.original)}\nTRANSLATION: ${clip(p.translation)}`
+    return `[${id}]${flag}\nPASSAGE A: ${clip(p.original)}\nPASSAGE B: ${clip(p.translation)}`
   })
 
   const useModel = model || DEFAULT_VERIFY_MODEL

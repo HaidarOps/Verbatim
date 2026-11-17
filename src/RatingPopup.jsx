@@ -121,6 +121,10 @@ const ISSUE_EXPLAIN = {
     'ChatGPT read both passages and found a real problem with the translation here — something important was changed, added, or left out.',
 }
 const ISSUE_TITLE = { alignment: 'Alignment error', translation: 'Translation error' }
+// The `expected` field reads differently per verdict: for a translation error
+// it is the gist of what the passage should say; for an alignment error it is
+// what each side is actually about.
+const EXPECTED_LABEL = { alignment: 'What each passage says', translation: 'The gist' }
 function IssueLine({ issue }) {
   const level = issue.level === 'alignment' ? 'alignment' : 'translation'
   return (
@@ -131,7 +135,7 @@ function IssueLine({ issue }) {
       </p>
       {issue.expected && (
         <p className="rate-issue-expected">
-          <strong>What’s missing or changed:</strong> {issue.expected}
+          <strong>{EXPECTED_LABEL[level]}:</strong> {issue.expected}
         </p>
       )}
     </div>
