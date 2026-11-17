@@ -2,26 +2,31 @@
 // Vite dev/preview server (see vite.config.js) so the API key never reaches the
 // browser.
 //
-//   POST /api/verify  { book, pairs: [{ key, original, translation, flag }] }
+//   POST /api/verify  { book, pairs: [{ key, original, translation, flag,
+//                       before_a, after_a, before_b, after_b }] }
 //        -> { model, results: { [key]: { verdict, severity, reason, expected } } }
-//   where `expected` is, for an error, a plain-English gist for a reader who
-//   knows neither language: for a translation error, what the source means and
-//   what the translation gets wrong; for an alignment error, what each side is
-//   about (making clear they don't correspond). The model decides which side is
-//   the original — it is not assumed to be PASSAGE A.
+//   where before_*/after_* are the neighbouring sentences on each side (context
+//   so the model can tell an off-by-one slip from a real divergence), and
+//   `expected` is, for an error, a plain-English gist for a reader who knows
+//   neither language. The model decides which side is the original — it is not
+//   assumed to be PASSAGE A.
 //   GET  /api/verify?book=<id>
 //        -> { model, results }  (everything verified so far)
 //
-// Only the passages Gale–Church already flagged are sent here (see redSignals
+// Only the passages Gale–Church already flagged are sent here (see candidates
 // in src/issues.js), so this is a small, targeted second opinion rather than a
 // whole-book scan. Each pair is judged by a capable model (gpt-5-mini by
 // default, NOT the cheap scan model) and labelled:
-//   alignment_error    the two passages are not translations of each other
-//                      (Gale–Church matched the wrong pieces)
+//   alignment_error    the two passages don't correspond AND nothing nearby does
+//                      (a real divergence — omitted/added/restructured)
 //   translation_error  they correspond, but the translation is seriously wrong
 //                      (a real omission, addition or distortion)
+//   misaligned         they don't correspond, but the true counterpart is an
+//                      adjacent sentence — our matcher slipped (a tool glitch,
+//                      not a fault in the book; hidden from readers)
 //   fine               Gale–Church was suspicious, but the pair is acceptable
-// Only the two error verdicts become confirmed issues; "fine" clears the flag.
+// alignment_error and translation_error are the reader-facing confirmed issues;
+// "misaligned" is dev-only noise and "fine" clears the flag.
 //
 // Results are cached on disk in scans/<book>.verify-<model>.json, keyed by the
 // page's hash of the pair's text, so a pair is only ever paid for once and the
@@ -34,40 +39,51 @@ const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 export const DEFAULT_VERIFY_MODEL = 'gpt-5-mini'
 const MAX_PAIRS = 20 // per request; these passages are the long, suspicious ones
 const MAX_SIDE_CHARS = 2000 // per side of a pair; longer text is truncated
-const VERDICTS = ['alignment_error', 'translation_error', 'fine']
+const MAX_CONTEXT_CHARS = 700 // per neighbour-context block
+const VERDICTS = ['alignment_error', 'translation_error', 'misaligned', 'fine']
 
 const SYSTEM_PROMPT = `You are an expert literary translator auditing how two
 editions of the same work line up. A fast heuristic (and sometimes a quick AI
-read) flagged the passage pairs below as suspicious; confirm or clear each by
-reading it. Each pair has an id, a "flag" naming why it was suspicious, and two
-passages — PASSAGE A and PASSAGE B — the same span from the two editions, in
-different languages. Identify each language yourself.
+read) flagged the passage pairs below; confirm or clear each by reading it. Each
+pair has an id, a "flag" naming why it was suspicious, and two passages —
+PASSAGE A and PASSAGE B — the span our matcher paired, each from one edition, in
+different languages. To help you judge, a few neighbouring sentences from each
+edition are given as CONTEXT BEFORE / CONTEXT AFTER — the lines around the
+passage in that edition. The context is for reference only; it is NOT part of
+the pair being judged.
 
-Do NOT assume which side is the original. For many works the classical or
-source-language side (Greek, Latin, French, Russian, …) is the original and the
-English is the translation, not the other way round. Decide which is the source
-and which is the translation from the languages and the content.
+Identify each language yourself. Do NOT assume which side is the original; for
+many works the classical or source-language side (Greek, Latin, French,
+Russian, …) is the original and the English is the translation. Decide from the
+languages and content.
 
-Give each pair one verdict:
-- "alignment_error": the two passages are not about the same thing — they do not
-  correspond (the matcher paired the wrong pieces, or the editions are offset
-  here). Use this whenever the content differs substantially, EVEN IF each
-  passage reads fine on its own. Do not describe this as a translation mistake.
-- "translation_error": the passages DO correspond, but the translation is
+Work out whether PASSAGE A and PASSAGE B are the same span of the story, then
+give one verdict:
+- "misaligned": A and B are NOT the same span, but B's true counterpart is right
+  next to A — it is one of A's CONTEXT sentences (just before or after). Our
+  matcher slipped by a sentence or two; the content is present, only shifted.
+  This is a tool glitch, not a fault in the book. In "reason", say which way it
+  slipped (e.g. "B matches the sentence after A").
+- "alignment_error": A and B are not the same span AND B's counterpart is NOT in
+  the context shown either — the passage genuinely has no nearby counterpart
+  (truly omitted or added, or the editions diverge here).
+- "translation_error": A and B ARE the same span, but the translation is
   seriously wrong — a real omission, addition, or distortion of meaning.
-- "fine": they correspond and the translation is acceptable (minor liberties ok).
-Be strict: reserve the two error verdicts for clear, significant problems a
-reader would agree are really bad. When in doubt, answer "fine".
+- "fine": they are the same span and the translation is acceptable (minor
+  liberties ok).
+Prefer "misaligned" over "alignment_error" whenever a context sentence clearly
+matches. Be strict with "translation_error": reserve it for clear, significant
+faults. When unsure between fine and an error, answer "fine".
 
 For each result give:
 - "severity": 1-5, how bad the problem is (5 = egregious); 0 when the verdict is "fine".
-- "reason": at most 20 words naming the problem; empty when "fine".
+- "reason": at most 20 words naming the problem (for "misaligned", the slip direction); empty when "fine".
 - "expected": for an error, a plain-English gist for a reader who knows NEITHER
   language — name the language of each side ("The Greek says…; the English
   says…"). For a translation_error, say what the source passage actually means
-  and what the translation gets wrong or leaves out. For an alignment_error, say
-  in one line what each passage is about, making clear they do not match. Empty
-  string when the verdict is "fine".
+  and what the translation gets wrong or leaves out. For an alignment_error or
+  misaligned, say in one line what each passage is about. Empty string when the
+  verdict is "fine".
 Return exactly one result for every id.`
 
 const RESPONSE_SCHEMA = {
@@ -104,10 +120,12 @@ export class VerifyError extends Error {
   }
 }
 
-const clip = (s) => {
+const clipTo = (limit) => (s) => {
   const t = typeof s === 'string' ? s.trim() : ''
-  return t.length > MAX_SIDE_CHARS ? `${t.slice(0, MAX_SIDE_CHARS)}…` : t
+  return t.length > limit ? `${t.slice(0, limit)}…` : t
 }
+const clip = clipTo(MAX_SIDE_CHARS)
+const clipContext = clipTo(MAX_CONTEXT_CHARS)
 
 // Reasoning models (GPT-5 family, o-series) spend hidden, billed reasoning
 // tokens; this check is a close read of a few passages, so a low-but-nonzero
@@ -133,7 +151,19 @@ export async function verifyBatch(pairs, { apiKey, model, reasoning, fetchImpl =
     const id = `p${i + 1}`
     byId.set(id, p.key)
     const flag = p.flag ? `\nflag: ${p.flag}` : ''
-    return `[${id}]${flag}\nPASSAGE A: ${clip(p.original)}\nPASSAGE B: ${clip(p.translation)}`
+    const ctx = (label, text) => {
+      const c = clipContext(text)
+      return c ? `\n${label}: ${c}` : ''
+    }
+    return (
+      `[${id}]${flag}` +
+      ctx('CONTEXT BEFORE A', p.before_a) +
+      `\nPASSAGE A: ${clip(p.original)}` +
+      ctx('CONTEXT AFTER A', p.after_a) +
+      ctx('CONTEXT BEFORE B', p.before_b) +
+      `\nPASSAGE B: ${clip(p.translation)}` +
+      ctx('CONTEXT AFTER B', p.after_b)
+    )
   })
 
   const useModel = model || DEFAULT_VERIFY_MODEL

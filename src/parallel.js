@@ -64,6 +64,30 @@ export function createLinker(pairs) {
   }
   const beadRange = (bead, side) => (side === 'src' ? [bead.s, bead.sn] : [bead.t, bead.tn])
 
+  // The `span` sentences on each side of a bead, as text — the neighbouring
+  // lines just before and after it in each book. Sent to the verifier so it can
+  // tell an off-by-one alignment slip (the real counterpart is right next door)
+  // from a genuine divergence. Clamped to the section's sentence range.
+  function contextFor(pair, bead, span = 2) {
+    const alignment = alignmentFor(pair)
+    const ids = (from, to, max) => {
+      const out = []
+      for (let k = Math.max(0, from); k < Math.min(max, to); k++) out.push(k)
+      return out
+    }
+    const text = (side, list) => toPieces(pair, side, list).map((p) => p.text).join(' ')
+    const [s, sn] = [bead.s, bead.sn]
+    const [t, tn] = [bead.t, bead.tn]
+    const srcN = alignment.src.length
+    const tgtN = alignment.tgt.length
+    return {
+      beforeSrc: text('src', ids(s - span, s, srcN)),
+      afterSrc: text('src', ids(s + sn, s + sn + span, srcN)),
+      beforeTgt: text('tgt', ids(t - span, t, tgtN)),
+      afterTgt: text('tgt', ids(t + tn, t + tn + span, tgtN)),
+    }
+  }
+
   // pieces: [{ spine, ord, start, end }] selected on `side`. Returns
   // { own, other, beads } — pieces to highlight on each side plus the beads
   // involved — or null when the selection is not in aligned body text (a
@@ -160,7 +184,13 @@ export function createLinker(pairs) {
     const out = []
     for (let pair = 0; pair < pairs.length; pair++) {
       for (const bead of alignmentFor(pair).beads) {
-        out.push({ ...describe(pair, bead), gcFlag: beadFlag(bead), gcP: beadLengthP(bead), section: pairs[pair].title })
+        out.push({
+          ...describe(pair, bead),
+          context: contextFor(pair, bead),
+          gcFlag: beadFlag(bead),
+          gcP: beadLengthP(bead),
+          section: pairs[pair].title,
+        })
       }
       onProgress?.(pair + 1, pairs.length)
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -350,6 +380,7 @@ export const SCAN_UNDERLINE = {
 export const ISSUE_UNDERLINE = {
   translation: ['rgba(200, 0, 40, 0.95)', 3], // confirmed translation error (crimson)
   alignment: ['rgba(150, 0, 200, 0.95)', 3], // confirmed alignment error (purple)
+  misaligned: ['rgba(120, 120, 120, 0.7)', 1.5], // dev-only: the aligner slipped (grey, hidden from readers)
 }
 const HOVER_FILL = 'rgba(90, 120, 160, 0.18)' // emphasis while hovering an issue
 

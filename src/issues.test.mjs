@@ -13,7 +13,12 @@ console.log('\n# issueLevel / isConfirmedIssue')
   check('alignment error maps to alignment', issueLevel({ verdict: 'alignment_error' }) === 'alignment')
   check('translation error maps to translation', issueLevel({ verdict: 'translation_error' }) === 'translation')
   check('fine and missing map to null', issueLevel({ verdict: 'fine' }) === null && issueLevel(undefined) === null)
-  check('isConfirmedIssue only for the two errors', isConfirmedIssue({ verdict: 'translation_error' }) && !isConfirmedIssue({ verdict: 'fine' }))
+  check(
+    'misaligned is hidden by default, shown only when asked',
+    issueLevel({ verdict: 'misaligned' }) === null &&
+      issueLevel({ verdict: 'misaligned' }, { includeMisaligned: true }) === 'misaligned',
+  )
+  check('isConfirmedIssue excludes misaligned slips', isConfirmedIssue({ verdict: 'translation_error' }) && !isConfirmedIssue({ verdict: 'misaligned' }) && !isConfirmedIssue({ verdict: 'fine' }))
 }
 
 console.log('\n# candidates / redSignals (union of both indicators)')
@@ -53,9 +58,10 @@ console.log('\n# countIssues')
     b: { verdict: 'translation_error' },
     c: { verdict: 'translation_error' },
     d: { verdict: 'fine' },
+    e: { verdict: 'misaligned' },
   }
   const counts = countIssues(results)
-  check('counts by kind and total', counts.alignment === 1 && counts.translation === 2 && counts.total === 3, JSON.stringify(counts))
+  check('slips counted separately and left out of the reader total', counts.alignment === 1 && counts.translation === 2 && counts.misaligned === 1 && counts.total === 3, JSON.stringify(counts))
   check('empty results give zeroes', countIssues({}).total === 0)
 }
 
@@ -64,8 +70,14 @@ console.log('\n# runVerify posts flagged pairs to /api/verify with a source hint
   const scanResults = { k2: { kind: 'not_matching', score: 1 } }
   const items = candidates(
     [
-      { key: 'k1', gcFlag: 'unmatched', original: 'One.', translation: 'Elsewhere.' },
-      { key: 'k2', gcFlag: null, original: 'Two.', translation: 'Deux.' }, // scan-only
+      {
+        key: 'k1',
+        gcFlag: 'unmatched',
+        original: 'One.',
+        translation: 'Elsewhere.',
+        context: { beforeSrc: 'Zero.', afterSrc: 'Two.', beforeTgt: 'Zéro.', afterTgt: 'Deux.' },
+      },
+      { key: 'k2', gcFlag: null, original: 'Two.', translation: 'Deux.' }, // scan-only, no context
     ],
     scanResults,
   )
@@ -83,6 +95,9 @@ console.log('\n# runVerify posts flagged pairs to /api/verify with a source hint
   const flagFor = (key) => sent.flatMap((b) => b.pairs).find((p) => p.key === key).flag
   check('a length-flagged pair names the length check', flagFor('k1') === 'length check: no counterpart by length', flagFor('k1'))
   check('a scan-only pair names the AI read', flagFor('k2') === 'quick AI read: likely not a translation', flagFor('k2'))
+  const pairFor = (key) => sent.flatMap((b) => b.pairs).find((p) => p.key === key)
+  check('neighbour context is sent when present', pairFor('k1').before_a === 'Zero.' && pairFor('k1').after_a === 'Two.' && pairFor('k1').after_b === 'Deux.')
+  check('context fields default to empty when absent', pairFor('k2').before_a === '' && pairFor('k2').after_b === '')
   check('collects a result per pair', Object.keys(out.results).sort().join() === 'k1,k2')
 }
 

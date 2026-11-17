@@ -405,9 +405,14 @@ function CompareReader({ book }) {
   )
   const issuesCount = useMemo(() => countIssues(verify.results), [verify.results])
   const [issuesView, setIssuesView] = useState(false)
+  // Programmer-only: also underline the aligner's own slips (misaligned), which
+  // readers never see. Toggled from the scan panel.
+  const [showSlips, setShowSlips] = useState(false)
   useEffect(() => {
-    highlighter.setIssues(issuesView, (_bead, info) => issueLevel(verify.results[info.key]))
-  }, [highlighter, issuesView, verify.results])
+    highlighter.setIssues(issuesView, (_bead, info) =>
+      issueLevel(verify.results[info.key], { includeMisaligned: showSlips }),
+    )
+  }, [highlighter, issuesView, verify.results, showSlips])
 
   // Status messages fade after a few seconds.
   useEffect(() => {
@@ -508,7 +513,9 @@ function CompareReader({ book }) {
         </button>
       </div>
       {note && <div className="compare-status">{note}</div>}
-      {(heat || scanView || issuesView) && <HeatLegend gc={heat} scan={scanView} issues={issuesView} />}
+      {(heat || scanView || issuesView) && (
+        <HeatLegend gc={heat} scan={scanView} issues={issuesView} slips={issuesView && showSlips} />
+      )}
       <EpubPane
         className={`epub-pane${!parallel && book.englishSide === 'translation' ? ' pane-hidden' : ''}`}
         url={book.url}
@@ -574,6 +581,8 @@ function CompareReader({ book }) {
           onResults={addScanResults}
           verify={verify}
           onVerifyResults={addVerifyResults}
+          showSlips={showSlips}
+          onShowSlips={setShowSlips}
           onFocus={(pair) => {
             setShowScan(false)
             highlighter.focus(pair)
@@ -600,9 +609,10 @@ const ISSUE_LABELS = {
   translation: 'Confirmed translation error',
   alignment: 'Confirmed alignment error',
 }
-function HeatLegend({ gc, scan, issues }) {
+function HeatLegend({ gc, scan, issues, slips }) {
   const items = [
     ...(issues ? Object.entries(ISSUE_LABELS).map(([level, label]) => [label, ISSUE_UNDERLINE[level][0]]) : []),
+    ...(slips ? [['Alignment slip (dev only)', ISSUE_UNDERLINE.misaligned[0]]] : []),
     ...(gc ? Object.entries(HEAT_LABELS).map(([level, label]) => [label, GC_UNDERLINE[level][0]]) : []),
     ...(scan ? Object.entries(SCAN_LABELS).map(([level, label]) => [label, SCAN_UNDERLINE[level][0]]) : []),
   ]

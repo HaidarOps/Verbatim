@@ -16,7 +16,7 @@ const KIND_LABEL = { good: 'good', translation_issue: 'translation issue', not_m
 
 // Modal for the whole-book ChatGPT scan: estimate, run (resumable), and the
 // report on how Gale–Church's flags line up with ChatGPT's.
-function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, onFocus, onClose }) {
+function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, showSlips, onShowSlips, onFocus, onClose }) {
   const [beads, setBeads] = useState(null)
   const [prep, setPrep] = useState({ done: 0, total: 0 })
   const [run, setRun] = useState(null) // progress while scanning / after a run
@@ -82,6 +82,8 @@ function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, onF
               book={book}
               verify={verify || { model: '', results: {} }}
               scanResults={scan.results}
+              showSlips={showSlips}
+              onShowSlips={onShowSlips}
               onVerifyResults={onVerifyResults}
               onFocus={onFocus}
             />
@@ -138,8 +140,40 @@ function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, onF
 // model (issues.js → /api/verify), keep only the ones it agrees are really bad,
 // split into translation vs alignment errors. Runs once; the verdicts are
 // cached on disk, so the reader's "Issues" view needs no API call afterwards.
-const ISSUE_TAG = { translation: 'Translation error', alignment: 'Alignment error' }
-function IssuesSection({ beads, book, verify, scanResults, onVerifyResults, onFocus }) {
+const ISSUE_TAG = { translation: 'Translation error', alignment: 'Alignment error', misaligned: 'Alignment slip' }
+// Display level from a verdict (issueLevel hides misaligned by design, so the
+// panel reads the verdict directly to label both the reader issues and the
+// dev-only slips).
+const verdictLevel = (r) =>
+  r && r.verdict === 'alignment_error'
+    ? 'alignment'
+    : r && r.verdict === 'translation_error'
+      ? 'translation'
+      : r && r.verdict === 'misaligned'
+        ? 'misaligned'
+        : null
+
+// Worst severity first.
+const bySeverityDesc = (results) => (a, b) => (results[b.key].severity || 0) - (results[a.key].severity || 0)
+
+// One row in the panel's issue/slip list.
+function IssueRow({ ex, result, onFocus }) {
+  const level = verdictLevel(result)
+  return (
+    <li onClick={() => onFocus(ex)}>
+      <div className="scan-meta">
+        <span className={`issue-tag issue-${level}`}>{ISSUE_TAG[level]}</span>
+        {ex.section && <span>{ex.section.slice(0, 50)}</span>}
+      </div>
+      <p className="rate-passage rate-original">{ex.original}</p>
+      <p className="rate-passage rate-translation">{ex.translation}</p>
+      {result.reason && <p className="scan-issue">{result.reason}</p>}
+      {result.expected && <p className="scan-expected">{result.expected}</p>}
+    </li>
+  )
+}
+
+function IssuesSection({ beads, book, verify, scanResults, showSlips, onShowSlips, onVerifyResults, onFocus }) {
   const [run, setRun] = useState(null)
   const abortRef = useRef(null)
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -151,11 +185,14 @@ function IssuesSection({ beads, book, verify, scanResults, onVerifyResults, onFo
   const gcCount = useMemo(() => signals.filter((s) => s.gcFlag).length, [signals])
   const remaining = useMemo(() => signals.filter((s) => !results[s.key]), [signals, results])
   const counts = useMemo(() => countIssues(results), [results])
+  // Reader-facing confirmed issues (alignment + translation), slips excluded.
   const confirmed = useMemo(
-    () =>
-      signals
-        .filter((s) => issueLevel(results[s.key]))
-        .sort((a, b) => (results[b.key].severity || 0) - (results[a.key].severity || 0)),
+    () => signals.filter((s) => issueLevel(results[s.key])).sort(bySeverityDesc(results)),
+    [signals, results],
+  )
+  // The aligner's own slips: counterpart is next door, hidden from readers.
+  const slips = useMemo(
+    () => signals.filter((s) => results[s.key] && results[s.key].verdict === 'misaligned').sort(bySeverityDesc(results)),
     [signals, results],
   )
   const estimate = useMemo(() => estimateTokens(remaining), [remaining])
@@ -191,7 +228,11 @@ function IssuesSection({ beads, book, verify, scanResults, onVerifyResults, onFo
         )}
         . Verified with <span className="scan-model">{verify.model || 'the strong model'}</span>:{' '}
         <b>{fmt(signals.length - remaining.length)}</b>. Confirmed problems: <b>{fmt(counts.total)}</b>
-        {counts.total > 0 && ` (${fmt(counts.translation)} translation, ${fmt(counts.alignment)} alignment)`}.
+        {counts.total > 0 && ` (${fmt(counts.translation)} translation, ${fmt(counts.alignment)} alignment)`}
+        {counts.misaligned > 0 && (
+          <span className="scan-dim"> · {fmt(counts.misaligned)} alignment slips hidden from readers</span>
+        )}
+        .
       </p>
 
       {signals.length === 0 && (
@@ -237,23 +278,28 @@ function IssuesSection({ beads, book, verify, scanResults, onVerifyResults, onFo
         <>
           <p className="scan-dim">Click an issue to show it in the book.</p>
           <ul className="scan-examples">
-            {confirmed.slice(0, 30).map((ex) => {
-              const level = issueLevel(results[ex.key])
-              return (
-                <li key={ex.key} onClick={() => onFocus(ex)}>
-                  <div className="scan-meta">
-                    <span className={`issue-tag issue-${level}`}>{ISSUE_TAG[level]}</span>
-                    {ex.section && <span>{ex.section.slice(0, 50)}</span>}
-                  </div>
-                  <p className="rate-passage rate-original">{ex.original}</p>
-                  <p className="rate-passage rate-translation">{ex.translation}</p>
-                  {results[ex.key].reason && <p className="scan-issue">{results[ex.key].reason}</p>}
-                  {results[ex.key].expected && <p className="scan-expected">{results[ex.key].expected}</p>}
-                </li>
-              )
-            })}
+            {confirmed.slice(0, 30).map((ex) => (
+              <IssueRow key={ex.key} ex={ex} result={results[ex.key]} onFocus={onFocus} />
+            ))}
           </ul>
         </>
+      )}
+
+      {slips.length > 0 && (
+        <div className="scan-slips">
+          <label className="scan-slip-toggle">
+            <input type="checkbox" checked={!!showSlips} onChange={(e) => onShowSlips?.(e.target.checked)} />
+            Show the {fmt(slips.length)} alignment slips in the book (dev only — the matcher paired the
+            wrong sentence; readers never see these)
+          </label>
+          {showSlips && (
+            <ul className="scan-examples">
+              {slips.slice(0, 30).map((ex) => (
+                <IssueRow key={ex.key} ex={ex} result={results[ex.key]} onFocus={onFocus} />
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   )

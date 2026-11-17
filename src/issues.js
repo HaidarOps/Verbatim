@@ -11,12 +11,19 @@ import { isScanFlag, runScan, scanLevel } from './scan.js'
 
 // Overlay level for a verify result (see ISSUE_UNDERLINE in parallel.js), or
 // null — for a missing result or the "fine" verdict (flag cleared).
-export function issueLevel(result) {
+//
+// `misaligned` means our matcher slipped by a sentence or two: the counterpart
+// is present, just next door (a tool glitch, not a fault in the book). Readers
+// never see these — they only count/show as a level when `includeMisaligned`
+// is set, which is the programmer-only "show slips" toggle.
+export function issueLevel(result, { includeMisaligned = false } = {}) {
   if (!result) return null
   if (result.verdict === 'alignment_error') return 'alignment'
   if (result.verdict === 'translation_error') return 'translation'
+  if (result.verdict === 'misaligned') return includeMisaligned ? 'misaligned' : null
   return null
 }
+// A reader-facing confirmed issue: alignment or translation, never a slip.
 export const isConfirmedIssue = (result) => issueLevel(result) !== null
 
 // The beads worth verifying: nominated by either cheap detector and with text
@@ -51,16 +58,20 @@ export function nominationFlag(bead, scanResults = {}) {
   return parts.join('; ')
 }
 
-// Tally of confirmed issues in a results map: { alignment, translation, total }.
+// Tally of a results map: { alignment, translation, misaligned, total }.
+// `total` is the reader-facing count (alignment + translation); `misaligned`
+// (the aligner's own slips) is tracked separately and left out of the total.
 export function countIssues(results) {
   let alignment = 0
   let translation = 0
+  let misaligned = 0
   for (const key in results) {
-    const level = issueLevel(results[key])
-    if (level === 'alignment') alignment++
-    else if (level === 'translation') translation++
+    const verdict = results[key] && results[key].verdict
+    if (verdict === 'alignment_error') alignment++
+    else if (verdict === 'translation_error') translation++
+    else if (verdict === 'misaligned') misaligned++
   }
-  return { alignment, translation, total: alignment + translation }
+  return { alignment, translation, misaligned, total: alignment + translation }
 }
 
 // Verify `items` (from candidates()) with the strong model, reusing runScan's
@@ -77,6 +88,12 @@ export function runVerify(items, { scanResults = {}, ...options } = {}) {
       original: bead.original,
       translation: bead.translation,
       flag: nominationFlag(bead, scanResults),
+      // Neighbour sentences on each side (parallel.js attaches bead.context), so
+      // the model can tell an off-by-one slip from a genuine divergence.
+      before_a: bead.context ? bead.context.beforeSrc : '',
+      after_a: bead.context ? bead.context.afterSrc : '',
+      before_b: bead.context ? bead.context.beforeTgt : '',
+      after_b: bead.context ? bead.context.afterTgt : '',
     }),
   })
 }

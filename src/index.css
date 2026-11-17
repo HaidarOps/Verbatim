@@ -624,6 +624,23 @@ a {
 .issue-tag.issue-alignment {
   background: #9600c8;
 }
+.issue-tag.issue-misaligned {
+  background: #787878;
+}
+/* Dev-only alignment-slip controls in the scan panel. */
+.scan-slips {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed #ccc;
+}
+.scan-slip-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  color: #666;
+  cursor: pointer;
+}
 
 /* Reading settings ("Aa"): text size, font, spacing, margins, theme.
    The text itself is styled inside each chapter (readingSettings.js); these
