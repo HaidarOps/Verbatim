@@ -12,6 +12,7 @@
     "test:books": "node test/books.test.mjs && node test/plato.test.mjs"
   },
   "dependencies": {
+    "@netlify/blobs": "^11.1.9",
     "epubjs": "^0.3.93",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

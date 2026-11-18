@@ -1,0 +1,32 @@
+# Static build + a handful of serverless functions for the OpenAI-backed
+# endpoints (see netlify/functions/). Required site environment variables
+# (Site configuration → Environment variables, NOT .env.local, which isn't
+# deployed): OPENAI_API_KEY, and optionally OPENAI_MODEL, OPENAI_SCAN_MODEL,
+# OPENAI_SCAN_REASONING, OPENAI_VERIFY_MODEL, OPENAI_VERIFY_REASONING.
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  # @netlify/blobs (used by the functions) requires Node >=22.12; pin both the
+  # build and the function runtime explicitly rather than rely on whatever
+  # Netlify currently defaults to (also set in .nvmrc, for anything that reads
+  # that instead).
+  NODE_VERSION = "22"
+
+# The app calls fetch('/api/scan') etc.; map that straight to the matching
+# function (scan.js, verify.js, rate-translation.js, feedback.js) so no
+# frontend code needs to know it's talking to Netlify. status = 200 makes
+# this a rewrite (same URL, method and body preserved), not a redirect.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+# Client-side routing (react-router's BrowserRouter): any other path should
+# still serve the app shell, which then renders the right route.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
