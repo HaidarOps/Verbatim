@@ -21,12 +21,6 @@ const BUNDLED_BOOKS = [
     translationUrl: `${BASE}books/around_the_world_en.epub`,
     englishSide: 'translation',
   },
-  {
-    id: 'karamazov',
-    name: 'The Brothers Karamazov (English / German)',
-    url: `${BASE}books/karamazov_en.epub`,
-    translationUrl: `${BASE}books/karamazov_de.epub`,
-  },
 ]
 
 function App() {
