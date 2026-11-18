@@ -13,6 +13,12 @@ import { applyToDocument, keepPlace, loadSettings, readerVars, saveSettings } fr
 import { counterpartPlace, placeOfEntry, scrollToEntry, scrollToPlace, trackPlace } from './position.js'
 import ContentsDrawer from './ContentsDrawer.jsx'
 
+// The underlying machinery (Gale–Church view, ChatGPT view, the scan-details
+// panel) stays reachable in dev — Vite's own dev/build distinction, no extra
+// config — but is hidden from a production build. There, a reader sees just
+// "Check issues": press it on a new book, see the finished result.
+const DEV_TOOLS = import.meta.env.DEV
+
 // Pre-select the first matched section with real body text on both sides, so
 // the panel opens on the first chapter rather than a title page.
 const MIN_DEFAULT_LENGTH = 2000
@@ -578,31 +584,35 @@ function CompareReader({ book }) {
         <button className="align-button" onClick={() => setShowAlign(true)}>
           Align
         </button>
-        <button
-          className={`align-button${heat ? ' active' : ''}`}
-          onClick={() => setHeat((on) => !on)}
-          aria-pressed={heat}
-          title="Underline the sentences Gale–Church finds suspicious — hover and click one to see why"
-        >
-          Gale–Church view
-        </button>
-        <button
-          className="align-button"
-          onClick={() => setShowScan(true)}
-          disabled={!linker}
-          title="Advanced: the detailed comparison report, and manual re-verification (Check issues already runs this for you)"
-        >
-          Scan details
-        </button>
-        <button
-          className={`align-button${scanView ? ' active' : ''}`}
-          onClick={() => setScanView((on) => !on)}
-          aria-pressed={scanView}
-          disabled={scanCount === 0}
-          title={scanCount ? 'Underline the passages ChatGPT scored low — hover and click one to see why' : 'Run a ChatGPT scan first'}
-        >
-          ChatGPT view
-        </button>
+        {DEV_TOOLS && (
+          <>
+            <button
+              className={`align-button${heat ? ' active' : ''}`}
+              onClick={() => setHeat((on) => !on)}
+              aria-pressed={heat}
+              title="Underline the sentences Gale–Church finds suspicious — hover and click one to see why"
+            >
+              Gale–Church view
+            </button>
+            <button
+              className="align-button"
+              onClick={() => setShowScan(true)}
+              disabled={!linker}
+              title="Advanced: the detailed comparison report, and manual re-verification (Check issues already runs this for you)"
+            >
+              Scan details
+            </button>
+            <button
+              className={`align-button${scanView ? ' active' : ''}`}
+              onClick={() => setScanView((on) => !on)}
+              aria-pressed={scanView}
+              disabled={scanCount === 0}
+              title={scanCount ? 'Underline the passages ChatGPT scored low — hover and click one to see why' : 'Run a ChatGPT scan first'}
+            >
+              ChatGPT view
+            </button>
+          </>
+        )}
       </div>
       {note && <div className="compare-status">{note}</div>}
       {(heat || scanView || issuesView) && (
@@ -665,7 +675,7 @@ function CompareReader({ book }) {
           onClose={() => setShowAlign(false)}
         />
       )}
-      {showScan && linker && (
+      {DEV_TOOLS && showScan && linker && (
         <ScanPanel
           linker={linker}
           book={book.id}
