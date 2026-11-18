@@ -1,13 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { compareScan, estimateTokens, runScan, scannable } from './scan.js'
-import { candidates, countIssues, issueLevel, runVerify } from './issues.js'
-
-// Aligning a whole book takes a few seconds; do it once per linker.
-const beadsByLinker = new WeakMap()
-function beadsFor(linker, onProgress) {
-  if (!beadsByLinker.has(linker)) beadsByLinker.set(linker, linker.allBeads(onProgress))
-  return beadsByLinker.get(linker)
-}
+import { allBeadsCached, candidates, countIssues, issueLevel, runVerify } from './issues.js'
 
 const fmt = (n) => (n === null || n === undefined ? '–' : n.toLocaleString())
 const pct = (x) => (x === null || x === undefined ? '–' : `${Math.round(x * 100)}%`)
@@ -24,7 +17,7 @@ function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, sho
 
   useEffect(() => {
     let alive = true
-    beadsFor(linker, (done, total) => alive && setPrep({ done, total })).then((b) => alive && setBeads(b))
+    allBeadsCached(linker, (done, total) => alive && setPrep({ done, total })).then((b) => alive && setBeads(b))
     return () => {
       alive = false
     }
@@ -77,6 +70,11 @@ function ScanPanel({ linker, book, scan, onResults, verify, onVerifyResults, sho
 
         {beads && (
           <div className="scan-body">
+            <p className="scan-dim">
+              The toolbar’s <strong>Check issues</strong> button already runs the scan and
+              verification for you — this panel is for the detailed comparison report below, or
+              to re-run verification by hand.
+            </p>
             <IssuesSection
               beads={beads}
               book={book}

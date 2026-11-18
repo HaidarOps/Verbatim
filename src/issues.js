@@ -26,6 +26,15 @@ export function issueLevel(result, { includeMisaligned = false } = {}) {
 // A reader-facing confirmed issue: alignment or translation, never a slip.
 export const isConfirmedIssue = (result) => issueLevel(result) !== null
 
+// linker.allBeads() re-aligns every section's sentences, which takes a few
+// seconds on a long book; cache it per linker so the "Check issues" button and
+// the (optional, advanced) scan panel never pay for it twice.
+const beadsByLinker = new WeakMap()
+export function allBeadsCached(linker, onProgress) {
+  if (!beadsByLinker.has(linker)) beadsByLinker.set(linker, linker.allBeads(onProgress))
+  return beadsByLinker.get(linker)
+}
+
 // The beads worth verifying: nominated by either cheap detector and with text
 // on both sides, so there is something for the model to compare. Two
 // indicators, each catching what the other can't:

@@ -4,8 +4,8 @@ import ePub from 'epubjs'
 import { loadSections } from './chapters.js'
 import { alignSections, alignTexts, firstMatchedPairs } from './align.js'
 import { createCrossHighlighter, createLinker, GC_UNDERLINE, ISSUE_UNDERLINE, SCAN_UNDERLINE } from './parallel.js'
-import { scanLevel } from './scan.js'
-import { countIssues, issueLevel } from './issues.js'
+import { runScan, scanLevel, scannable } from './scan.js'
+import { allBeadsCached, candidates, countIssues, issueLevel, runVerify } from './issues.js'
 import ScanPanel from './ScanPanel.jsx'
 import RatingPopup from './RatingPopup.jsx'
 import ReadingMenu from './ReadingMenu.jsx'
@@ -327,6 +327,19 @@ function Pair({ index, pair }) {
   )
 }
 
+// Label for the "Check issues" button: progress while the pipeline (align →
+// cheap scan → strong-model verify, see runCheck) is running, otherwise the
+// confirmed count, or an invitation to press it the first time.
+function checkIssuesLabel(checking, issuesCount) {
+  if (checking) {
+    if (checking.phase === 'beads') return 'Aligning…'
+    if (checking.phase === 'scan') return checking.total ? `Scanning ${checking.done}/${checking.total}` : 'Scanning…'
+    if (checking.phase === 'verify') return checking.total ? `Verifying ${checking.done}/${checking.total}` : 'Verifying…'
+    return 'Checking…'
+  }
+  return issuesCount.total > 0 ? `Issues (${issuesCount.total})` : 'Check issues'
+}
+
 // Side-by-side reader. Selecting text in either book highlights it (amber)
 // and highlights the aligned passage in the other book (blue), scrolling the
 // other book to it. See parallel.js.
@@ -414,6 +427,77 @@ function CompareReader({ book }) {
     )
   }, [highlighter, issuesView, verify.results, showSlips])
 
+  // "Check issues": the one button that used to be three (open the scan
+  // panel, run the cheap scan, run the strong-model verification). Aligns the
+  // whole book, runs the cheap whole-book scan if it hasn't been (the second
+  // candidate source alongside Gale–Church, see issues.js), verifies the
+  // union with the strong model, then shows the confirmed issues. Every step
+  // is cached on disk per book, so pressing it again just resumes and is
+  // near-instant once everything has been checked once.
+  const [checking, setChecking] = useState(null) // null | { phase, done, total }
+  const [checkError, setCheckError] = useState('')
+  const checkingRef = useRef(false)
+  const runCheck = useCallback(async () => {
+    if (checkingRef.current || !linker) return
+    checkingRef.current = true
+    setCheckError('')
+    try {
+      setChecking({ phase: 'beads', done: 0, total: 0 })
+      const beads = await allBeadsCached(linker, (done, total) => setChecking({ phase: 'beads', done, total }))
+
+      let scanResultsMerged = scan.results
+      const scanItems = scannable(beads)
+      if (scanItems.some((it) => !scanResultsMerged[it.key])) {
+        setChecking({ phase: 'scan', done: 0, total: 0 })
+        const scanOut = await runScan(scanItems, {
+          book: book.id,
+          known: scanResultsMerged,
+          onProgress: (p) => {
+            addScanResults(p.results)
+            setChecking({ phase: 'scan', done: p.done, total: p.total })
+          },
+        })
+        addScanResults(scanOut.results)
+        scanResultsMerged = { ...scanResultsMerged, ...scanOut.results }
+        if (scanOut.error) {
+          setCheckError(scanOut.error)
+          return
+        }
+      }
+
+      const candidateList = candidates(beads, scanResultsMerged)
+      const verifyResultsNow = verify.results
+      if (candidateList.some((it) => !verifyResultsNow[it.key])) {
+        setChecking({ phase: 'verify', done: 0, total: 0 })
+        const verifyOut = await runVerify(candidateList, {
+          book: book.id,
+          known: verifyResultsNow,
+          scanResults: scanResultsMerged,
+          onProgress: (p) => {
+            addVerifyResults(p.results)
+            setChecking({ phase: 'verify', done: p.done, total: p.total })
+          },
+        })
+        addVerifyResults(verifyOut.results)
+        if (verifyOut.error) setCheckError(verifyOut.error)
+      }
+    } catch (err) {
+      setCheckError(err?.message || String(err))
+    } finally {
+      checkingRef.current = false
+      setChecking(null)
+    }
+  }, [linker, book.id, scan.results, verify.results, addScanResults, addVerifyResults])
+
+  const handleCheckIssues = () => {
+    if (issuesView) {
+      setIssuesView(false)
+      return
+    }
+    setIssuesView(true)
+    runCheck()
+  }
+
   // Status messages fade after a few seconds.
   useEffect(() => {
     if (!status) return
@@ -459,6 +543,7 @@ function CompareReader({ book }) {
   let note = status
   if (!note && !sections && !error) note = 'Linking the two books…'
   if (!note && error) note = error
+  if (!note && checkError) note = checkError
 
   return (
     <div className={`reader-compare theme-${reading.theme}`} style={readerVars(reading)}>
@@ -468,17 +553,19 @@ function CompareReader({ book }) {
           Contents
         </button>
         <button
-          className={`align-button issues-button${issuesView ? ' active' : ''}`}
-          onClick={() => setIssuesView((on) => !on)}
+          className={`align-button issues-button${issuesView ? ' active' : ''}${checking ? ' checking' : ''}`}
+          onClick={handleCheckIssues}
           aria-pressed={issuesView}
-          disabled={issuesCount.total === 0}
+          disabled={!linker}
           title={
-            issuesCount.total === 0
-              ? 'No confirmed issues yet — run a ChatGPT scan to verify the flagged passages'
-              : `Show ${issuesCount.total} confirmed issue${issuesCount.total === 1 ? '' : 's'} (${issuesCount.translation} translation, ${issuesCount.alignment} alignment)`
+            checking
+              ? 'Checking the book for issues — click again any time to hide the overlay'
+              : issuesCount.total > 0
+                ? `Show ${issuesCount.total} confirmed issue${issuesCount.total === 1 ? '' : 's'} (${issuesCount.translation} translation, ${issuesCount.alignment} alignment)`
+                : 'Scan the book and verify every flagged passage with ChatGPT, then show what it confirms'
           }
         >
-          Issues{issuesCount.total > 0 ? ` (${issuesCount.total})` : ''}
+          {checkIssuesLabel(checking, issuesCount)}
         </button>
         <button
           className={`align-button${parallel ? ' active' : ''}`}
@@ -499,8 +586,13 @@ function CompareReader({ book }) {
         >
           Gale–Church view
         </button>
-        <button className="align-button" onClick={() => setShowScan(true)} disabled={!linker}>
-          ChatGPT scan
+        <button
+          className="align-button"
+          onClick={() => setShowScan(true)}
+          disabled={!linker}
+          title="Advanced: the detailed comparison report, and manual re-verification (Check issues already runs this for you)"
+        >
+          Scan details
         </button>
         <button
           className={`align-button${scanView ? ' active' : ''}`}

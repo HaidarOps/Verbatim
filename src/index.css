@@ -260,6 +260,12 @@ a {
   background: #c80028;
   color: #fff;
 }
+/* "Check issues" is working through align → scan → verify (see runCheck in
+   Reader.jsx); the label itself shows progress, this just signals "busy". */
+.issues-button.checking {
+  opacity: 0.75;
+  cursor: progress;
+}
 
 /* Alignment modal */
 .align-backdrop {
