@@ -3,6 +3,12 @@
 # (Site configuration → Environment variables, NOT .env.local, which isn't
 # deployed): OPENAI_API_KEY, and optionally OPENAI_MODEL, OPENAI_SCAN_MODEL,
 # OPENAI_SCAN_REASONING, OPENAI_VERIFY_MODEL, OPENAI_VERIFY_REASONING.
+#
+# Feedback is NOT one of those functions: it goes through Netlify's own Forms
+# feature instead (the hidden "feedback" form in index.html, submitted to by
+# src/Feedback.jsx) — submissions land in the site's Forms tab in the Netlify
+# dashboard, where an email notification per submission can be turned on
+# without any server or email service of our own. See src/Feedback.jsx.
 [build]
   command = "npm run build"
   publish = "dist"
@@ -16,16 +22,18 @@
   NODE_VERSION = "22"
 
 # The app calls fetch('/api/scan') etc.; map that straight to the matching
-# function (scan.js, verify.js, rate-translation.js, feedback.js) so no
-# frontend code needs to know it's talking to Netlify. status = 200 makes
-# this a rewrite (same URL, method and body preserved), not a redirect.
+# function (scan.js, verify.js, rate-translation.js) so no frontend code
+# needs to know it's talking to Netlify. status = 200 makes this a rewrite
+# (same URL, method and body preserved), not a redirect.
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
   status = 200
 
 # Client-side routing (react-router's BrowserRouter): any other path should
-# still serve the app shell, which then renders the right route.
+# still serve the app shell, which then renders the right route. Netlify's
+# own form-submission handling (see above) intercepts a matching POST before
+# this rule runs, so it does not swallow the feedback form's POST to "/".
 [[redirects]]
   from = "/*"
   to = "/index.html"

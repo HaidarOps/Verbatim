@@ -7,6 +7,18 @@
     <title>verbatim</title>
   </head>
   <body>
+    <!--
+      Static decoy so Netlify's build-time crawler registers the "feedback"
+      form (it only scans built HTML, never the React app's runtime DOM).
+      src/Feedback.jsx submits to this same form by name, via fetch, from the
+      real on-screen textarea; this one is never shown or used directly. Once
+      registered, every submission shows up in the Netlify dashboard's Forms
+      tab, where you can also turn on an email notification per submission —
+      no server, no email service of our own.
+    -->
+    <form name="feedback" data-netlify="true" hidden>
+      <input type="text" name="message" />
+    </form>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

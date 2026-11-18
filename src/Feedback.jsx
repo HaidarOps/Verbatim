@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-// Simple feedback box: posts the message to /api/feedback.
+// Simple feedback box. In production this submits to Netlify's own Forms
+// feature (the hidden decoy form in index.html registers it at build time),
+// so every submission shows up in the Netlify dashboard's Forms tab — no
+// server or email service of our own needed, and you can turn on an email
+// notification per submission right there in Site settings. Locally
+// (`npm run dev`) there is no such thing as Netlify Forms, so it posts to
+// /api/feedback instead (server/feedback.js), to keep the feature testable.
 function Feedback() {
   const [message, setMessage] = useState("");
   const [state, setState] = useState("idle"); // idle | sending | sent | error
@@ -11,11 +17,17 @@ function Feedback() {
     if (!message.trim()) return;
     setState("sending");
     try {
-      const res = await fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
+      const res = import.meta.env.DEV
+        ? await fetch("/api/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message }),
+          })
+        : await fetch("/", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ "form-name": "feedback", message }).toString(),
+          });
       if (!res.ok) throw new Error();
       setMessage("");
       setState("sent");
