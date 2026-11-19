@@ -33,6 +33,30 @@ export function leafBlocks(doc) {
   return out
 }
 
+// Chapters render in iframes that allow scripts (needed for Safari, see
+// EpubPane in Reader.jsx) and share the app's origin, so a book's own script
+// could reach the app. Books opened from disk can contain anything; make each
+// chapter inert before it is rendered:
+// - drop <script> elements, on* handler attributes and javascript: URLs;
+// - unwrap <noscript>. With scripting on, the HTML parser reads its contents
+//   as raw text, so its paragraphs would vanish from the screen copy while the
+//   alignment copy (readBook's XML parse) still counts them — shifting the
+//   block numbering that leafBlocks() promises is identical on both.
+const URL_ATTR = /(^|:)(href|src|action|formaction|data|xlink:href)$/
+export function sanitizeChapter(doc) {
+  if (!doc || !doc.querySelectorAll) return
+  for (const s of doc.querySelectorAll('script')) s.remove()
+  for (const el of doc.querySelectorAll('*')) {
+    for (const attr of [...el.attributes]) {
+      const name = attr.name.toLowerCase()
+      if (name.startsWith('on') || (URL_ATTR.test(name) && /^\s*javascript:/i.test(attr.value))) {
+        el.removeAttribute(attr.name)
+      }
+    }
+  }
+  for (const n of doc.querySelectorAll('noscript')) n.replaceWith(...n.childNodes)
+}
+
 // Identifies a block across both copies: chapter file (spine index) + ordinal.
 export function blockKey(spine, ord) {
   return `${spine}:${ord}`

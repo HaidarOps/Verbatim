@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import ePub from 'epubjs'
-import { loadSections } from './chapters.js'
+import { loadSections, sanitizeChapter } from './chapters.js'
 import { alignSections, alignTexts, firstMatchedPairs } from './align.js'
 import { createCrossHighlighter, createLinker, GC_UNDERLINE, ISSUE_UNDERLINE, SCAN_UNDERLINE } from './parallel.js'
 import { runScan, scanLevel, scannable } from './scan.js'
@@ -143,12 +143,21 @@ function EpubPane({ url, className, watchResize, onRendition, settings, bookId =
 
     const el = ref.current
     const epub = ePub(url, { openAs: 'epub' })
+    // Runs on each parsed chapter before it goes into its iframe; see
+    // sanitizeChapter for why that matters now that the iframe allows scripts.
+    epub.spine.hooks.content.register(sanitizeChapter)
     const rendition = epub.renderTo(el, {
       width: '100%',
       height: '100%',
       flow: 'scrolled-doc',
       manager: 'continuous',
       offset: FULL_BOOK_OFFSET, // render the whole book up front, no lazy scroll-loading
+      // Safari: epubjs renders each chapter in an iframe sandboxed without
+      // "allow-scripts", and WebKit then refuses to run any event listener in
+      // it — including the ones epubjs attaches from this page to pass
+      // mouseup/click/mousemove out. Selecting text, hovering and clicking
+      // flagged passages all silently did nothing. Chrome runs them anyway.
+      allowScriptedContent: true,
     })
     rendition.hooks.content.register((contents) => {
       removeHoverStyles(contents.document)

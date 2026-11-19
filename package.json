@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node src/align.test.mjs && node src/readingSettings.test.mjs && node src/scan.test.mjs && node src/issues.test.mjs && node server/rateTranslation.test.mjs && node server/scanTranslations.test.mjs && node server/verifyIssues.test.mjs",
+    "test": "node src/align.test.mjs && node src/chapters.test.mjs && node src/readingSettings.test.mjs && node src/scan.test.mjs && node src/issues.test.mjs && node server/rateTranslation.test.mjs && node server/scanTranslations.test.mjs && node server/verifyIssues.test.mjs",
     "test:books": "node test/books.test.mjs && node test/plato.test.mjs"
   },
   "dependencies": {
