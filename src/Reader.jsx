@@ -19,6 +19,9 @@ import ContentsDrawer from './ContentsDrawer.jsx'
 // "Check issues": press it on a new book, see the finished result.
 const DEV_TOOLS = import.meta.env.DEV
 
+// Phone-sized screen (matches the @media (max-width: 700px) rules in index.css).
+const isPhoneWidth = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 700px)').matches
+
 // Pre-select the first matched section with real body text on both sides, so
 // the panel opens on the first chapter rather than a title page.
 const MIN_DEFAULT_LENGTH = 2000
@@ -363,7 +366,8 @@ function CompareReader({ book }) {
   const [showScan, setShowScan] = useState(false)
   // Parallel view on: both books side by side. Off: only the English book
   // (both stay mounted so cross-highlighting keeps working; one is just hidden).
-  const [parallel, setParallel] = useState(true)
+  // Phones start with it off: two columns on a phone are a few words wide.
+  const [parallel, setParallel] = useState(() => !isPhoneWidth())
   const [reading, setReading] = useReadingSettings()
   const [status, setStatus] = useState('')
   // The passage popup: from a selection (onLink) or a click on a flagged,

@@ -87,6 +87,9 @@ export function readerCss(settings) {
   const s = normalizeSettings(settings)
   const rules = []
   const inset = Math.max(0, MARGINS[s.margins].px - PANE_PADDING)
+  // iOS Safari "autosizes" text in narrow columns, inflating some paragraphs
+  // and not others; the text size is the reader's choice (fontSize below).
+  rules.push('html { -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important; }')
   rules.push(`body { padding-left: ${inset}px !important; padding-right: ${inset}px !important; box-sizing: border-box !important; }`)
   if (s.fontSize !== 100) rules.push(`body { font-size: ${s.fontSize}% !important; }`)
   const font = FONTS[s.font].stack

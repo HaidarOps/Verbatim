@@ -25,6 +25,8 @@ export const DARK_HIGHLIGHT_FILLS = {
   'xh-hover': 'rgba(170, 200, 240, 0.22)',
 }
 const OTHER = { src: 'tgt', tgt: 'src' }
+// How long a touch selection must stay unchanged before it counts as made.
+const TOUCH_SELECTION_SETTLE_MS = 400
 
 // ---------------------------------------------------------------------------
 // Alignment lookup
@@ -662,6 +664,27 @@ export function createCrossHighlighter({ onStatus, onLink, onIssue } = {}) {
       if (issuesOn) panes[side].issues.set(true)
       const onRelease = (_event, contents) => handleSelection(side, contents)
       for (const type of ['mouseup', 'touchend', 'keyup']) rendition.on(type, onRelease)
+
+      // Phones: a long-press selects text natively, and the selection is
+      // finished — or adjusted with the handles — after the finger has lifted.
+      // touchend fires too early to see it and handle-dragging fires no events
+      // at all, so the phone's own selection just sat there. After a touch,
+      // act once the selection has stopped changing instead. (Not for the
+      // mouse: there selectionchange fires mid-drag, and mouseup is reliable.)
+      rendition.hooks.content.register((contents) => {
+        const doc = contents.document
+        if (!doc) return
+        let touch = false
+        let timer = 0
+        doc.addEventListener('touchstart', () => (touch = true), { passive: true })
+        doc.addEventListener('pointerdown', (e) => (touch = e.pointerType === 'touch'), { passive: true })
+        doc.addEventListener('mousedown', () => (touch = false), { passive: true })
+        doc.addEventListener('selectionchange', () => {
+          if (!touch) return
+          clearTimeout(timer)
+          timer = setTimeout(() => handleSelection(side, contents), TOUCH_SELECTION_SETTLE_MS)
+        })
+      })
 
       // Hover + click on flagged (underlined) passages, only while a view is on.
       const findIssue = (contents, event) => {
