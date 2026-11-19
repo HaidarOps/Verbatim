@@ -335,6 +335,34 @@ const underline = (color, thickness) =>
   `text-decoration-line: underline; text-decoration-color: ${color};` +
   ` text-decoration-thickness: ${thickness}px; text-underline-offset: 2px;`
 
+// Safari — and every other WebKit browser, which includes all browsers on
+// iOS — paints a ::highlight() underline twice: once in the colour asked for,
+// once in the text colour, which blurs the colour coding of flagged passages
+// (crimson translation error vs purple alignment error). Background fills
+// render correctly there, so WebKit gets a light tint instead. It's a
+// rendering bug no feature test can see, hence the user-agent check.
+export const FLAG_STYLE =
+  typeof navigator !== 'undefined' &&
+  /AppleWebKit/.test(navigator.userAgent) &&
+  !/Chrome\/|Chromium\/|Edg\/|OPR\//.test(navigator.userAgent)
+    ? 'tint'
+    : 'underline'
+
+// A flag's colour as a background tint: the same hue, stronger for the worse
+// flags (the underline's thickness is what encodes severity).
+export function tintColor(color, thickness) {
+  const alpha = Math.min(0.32, 0.1 * thickness).toFixed(2)
+  return color.replace(/rgba?\(\s*([^,]+),\s*([^,]+),\s*([^,)]+)(?:,[^)]*)?\)/, `rgba($1, $2, $3, ${alpha})`)
+}
+const flagDecl = (color, thickness) =>
+  FLAG_STYLE === 'tint' ? fill(tintColor(color, thickness)) : underline(color, thickness)
+
+// Legend swatch matching how flagged passages look in this browser.
+export const flagSwatchStyle = ([color, thickness]) =>
+  FLAG_STYLE === 'tint'
+    ? { background: tintColor(color, thickness), height: '12px' }
+    : { borderBottom: `3px solid ${color}` }
+
 // One background highlight in one rendition. set() paints the pieces in every
 // rendered chapter and returns the first painted { range, contents }.
 function createPainter(rendition, name, color, priority) {
@@ -391,7 +419,7 @@ function createHeatPainter(rendition, side, getLinker, { prefix, styles, classif
     const levels = enabled && linker ? linker.heat(side, contents.sectionIndex, classify()) : {}
     for (const level of Object.keys(styles)) {
       const [color, thickness] = styles[level]
-      paintHighlight(contents, `${prefix}-${level}`, underline(color, thickness), 0, levels[level] || [])
+      paintHighlight(contents, `${prefix}-${level}`, flagDecl(color, thickness), 0, levels[level] || [])
     }
   }
   rendition.hooks.content.register((contents) => {

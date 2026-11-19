@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import ePub from 'epubjs'
 import { loadSections, sanitizeChapter } from './chapters.js'
 import { alignSections, alignTexts, firstMatchedPairs } from './align.js'
-import { createCrossHighlighter, createLinker, GC_UNDERLINE, ISSUE_UNDERLINE, SCAN_UNDERLINE } from './parallel.js'
+import { createCrossHighlighter, createLinker, flagSwatchStyle, GC_UNDERLINE, ISSUE_UNDERLINE, SCAN_UNDERLINE } from './parallel.js'
 import { runScan, scanLevel, scannable } from './scan.js'
 import { allBeadsCached, candidates, countIssues, issueLevel, runVerify } from './issues.js'
 import ScanPanel from './ScanPanel.jsx'
@@ -722,16 +722,16 @@ const ISSUE_LABELS = {
 }
 function HeatLegend({ gc, scan, issues, slips }) {
   const items = [
-    ...(issues ? Object.entries(ISSUE_LABELS).map(([level, label]) => [label, ISSUE_UNDERLINE[level][0]]) : []),
-    ...(slips ? [['Alignment slip (dev only)', ISSUE_UNDERLINE.misaligned[0]]] : []),
-    ...(gc ? Object.entries(HEAT_LABELS).map(([level, label]) => [label, GC_UNDERLINE[level][0]]) : []),
-    ...(scan ? Object.entries(SCAN_LABELS).map(([level, label]) => [label, SCAN_UNDERLINE[level][0]]) : []),
+    ...(issues ? Object.entries(ISSUE_LABELS).map(([level, label]) => [label, ISSUE_UNDERLINE[level]]) : []),
+    ...(slips ? [['Alignment slip (dev only)', ISSUE_UNDERLINE.misaligned]] : []),
+    ...(gc ? Object.entries(HEAT_LABELS).map(([level, label]) => [label, GC_UNDERLINE[level]]) : []),
+    ...(scan ? Object.entries(SCAN_LABELS).map(([level, label]) => [label, SCAN_UNDERLINE[level]]) : []),
   ]
   return (
     <div className="heat-legend">
-      {items.map(([label, color]) => (
+      {items.map(([label, style]) => (
         <span key={label} className="heat-item">
-          <span className="heat-swatch" style={{ borderBottom: `3px solid ${color}` }} />
+          <span className="heat-swatch" style={flagSwatchStyle(style)} />
           {label}
         </span>
       ))}

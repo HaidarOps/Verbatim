@@ -203,7 +203,8 @@ a {
   white-space: nowrap;
 }
 
-/* A short underline in the flagged passage's colour (matches the text). */
+/* A short underline in the flagged passage's colour (matches the text); in
+   Safari a tinted block instead (see FLAG_STYLE in parallel.js). */
 .heat-swatch {
   display: inline-block;
   width: 18px;
