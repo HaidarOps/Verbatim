@@ -12,6 +12,7 @@ import ReadingMenu from './ReadingMenu.jsx'
 import { applyToDocument, keepPlace, loadSettings, readerVars, saveSettings } from './readingSettings.js'
 import { counterpartPlace, placeOfEntry, scrollToEntry, scrollToPlace, trackPlace } from './position.js'
 import ContentsDrawer from './ContentsDrawer.jsx'
+import GettingStarted from './GettingStarted.jsx'
 
 // The underlying machinery (Gale–Church view, ChatGPT view, the scan-details
 // panel) stays reachable in dev — Vite's own dev/build distinction, no extra
@@ -586,6 +587,7 @@ function CompareReader({ book }) {
         >
           {checkIssuesLabel(checking, issuesCount)}
         </button>
+        <GettingStarted label="How to" />
         <button
           className={`align-button${parallel ? ' active' : ''}`}
           onClick={() => setParallel((on) => !on)}

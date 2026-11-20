@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import { Link } from 'react-router-dom'
+import GettingStarted from './GettingStarted.jsx'
 
 function Home({ books, onAdd, onAddTranslation }) {
   const originalRef = useRef(null)
@@ -57,6 +58,8 @@ function Home({ books, onAdd, onAddTranslation }) {
       <Link className="feedback-button" to="/feedback">
         Feedback
       </Link>
+      <GettingStarted className="guide-button" />
+
     </main>
   )
 }

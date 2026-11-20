@@ -1050,3 +1050,73 @@ a {
   color: #000;
   text-decoration: none;
 }
+
+/* "How to get started": the home page's other corner button, styled to
+   match Feedback. */
+.guide-button {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  padding: 6px 18px;
+  font: inherit;
+  border: 1px solid #000;
+  background: #fff;
+  color: #000;
+  cursor: pointer;
+}
+
+/* The guide itself: above everything, including the reader and its book
+   iframes (z-index 100) and the other panels (up to 200). */
+.guide-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.guide-panel {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  padding: 24px 24px 20px;
+  background: #fff;
+  color: #000;
+  border: 1px solid #000;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.guide-panel h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+.guide-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 20px;
+  cursor: pointer;
+}
+.guide-steps {
+  margin: 0 0 18px;
+  padding-left: 22px;
+}
+.guide-steps li {
+  margin-bottom: 10px;
+}
+.guide-red {
+  color: #c80028;
+  font-weight: 600;
+}
+.guide-purple {
+  color: #9600c8;
+  font-weight: 600;
+}
